@@ -10,6 +10,8 @@ const {
   entersState,
   VoiceConnectionStatus,
 } = require('@discordjs/voice');
+const dgram = require('node:dgram');
+const crypto = require('node:crypto');
 const { ChannelType, PermissionFlagsBits } = require('discord.js');
 const logger = require('../utils/logger');
 const { getSetting, setSetting, deleteSetting } = require('../database/database');
@@ -25,6 +27,54 @@ const sessions = new Map();
 /** Oto-rejoin devam etmeli mi? (saf karar fonksiyonu — test edilebilir) */
 function shouldRejoin(attempts) {
   return Number.isInteger(attempts) && attempts < MAX_REJOIN_ATTEMPTS;
+}
+
+/**
+ * Genel UDP çıkış testi: gerçek bir DNS sorgusu gönderip cevap bekler.
+ * (UDP'de "gönderim başarısı" anlamsızdır — cevap gelmesi gerekir.)
+ * @returns {Promise<boolean>} true = bu makineden UDP çıkışı çalışıyor
+ */
+function probeUdpEgress(host = '1.1.1.1', port = 53, timeoutMs = 2500) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      try {
+        socket.close();
+      } catch {
+        /* ignore */
+      }
+      resolve(ok);
+    };
+    let socket;
+    try {
+      socket = dgram.createSocket('udp4');
+      // Minimal DNS sorgusu (discord.com, A kaydı)
+      const txid = crypto.randomBytes(2);
+      const header = Buffer.concat([txid, Buffer.from([0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])]);
+      const labels = 'discord.com'.split('.').map((p) => Buffer.concat([Buffer.from([p.length]), Buffer.from(p, 'utf8')]));
+      const question = Buffer.concat([...labels, Buffer.from([0x00, 0x00, 0x01, 0x00, 0x01])]);
+      const packet = Buffer.concat([header, question]);
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      socket.once('message', () => {
+        clearTimeout(timer);
+        finish(true);
+      });
+      socket.once('error', () => {
+        clearTimeout(timer);
+        finish(false);
+      });
+      socket.send(packet, port, host, (err) => {
+        if (err) {
+          clearTimeout(timer);
+          finish(false);
+        }
+      });
+    } catch {
+      finish(false);
+    }
+  });
 }
 
 function getSavedVoiceChannel(guildId) {
@@ -199,10 +249,21 @@ async function joinVoice(guild, channelOrId) {
       throw e;
     }
     if (err?.name === 'AbortError' && sawConnecting) {
-      // Gateway OK ama ses sunucusuna UDP kurulamadı → ağ engeli (ISS/DPI), kod hatası değil
+      // Gateway OK ama ses sunucusuna UDP kurulamadı. Genel UDP çıkışını da
+      // yoklayıp mesajı netleştir (ortam engeli mi, Discord'a özel mi?).
+      let udpNote = '';
+      try {
+        const udpOk = await probeUdpEgress();
+        udpNote = udpOk
+          ? ' (Not: genel UDP çıkışı çalışıyor — engel Discord sesine özel görünüyor.)'
+          : ' (Not: bu makineden genel UDP çıkışı da yok — ortam UDP engelliyor.)';
+      } catch {
+        /* prob kritik değil */
+      }
       const e = new Error(
         'Ses sunucusuna bağlanılamadı (ses trafiği engelleniyor olabilir). ' +
-          'VPN’i bağlayıp tekrar deneyin veya botu yurtdışında bir sunucuda çalıştırın.',
+          'VPN’i bağlayıp tekrar deneyin veya botu yurtdışında bir sunucuda çalıştırın.' +
+          udpNote,
       );
       e.code = 'VOICE_UDP_BLOCKED';
       throw e;
@@ -246,6 +307,7 @@ module.exports = {
   READY_TIMEOUT_MS,
   voiceKey,
   shouldRejoin,
+  probeUdpEgress,
   getSavedVoiceChannel,
   getCurrentChannelId,
   joinVoice,
