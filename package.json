@@ -1,0 +1,23 @@
+{
+  "name": "wellsd-autorazer",
+  "version": "1.0.0",
+  "description": "WELLSD AUTORAZER - FiveM ekibi için production-ready Discord botu",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "deploy": "node deploy-commands.js",
+    "doctor": "node doctor.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "@discordjs/voice": "^0.19.0",
+    "discord.js": "^14.18.1",
+    "dotenv": "^16.4.7",
+    "libsodium-wrappers": "^0.8.4",
+    "undici": "^6.28.1"
+  }
+}
