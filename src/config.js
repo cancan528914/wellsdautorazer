@@ -110,6 +110,8 @@ const config = {
     panelImage: (process.env.TICKET_PANEL_IMAGE || '').trim() || null,
     maxOpenPerUser: int('TICKET_MAX_OPEN_PER_USER', 1),
     callCooldownMs: int('TICKET_CALL_COOLDOWN_MS', 300000), // Yetkili Çağır bekleme süresi (5 dk)
+    // Yeni ticket açıldığında etiketlenecek rol (boşsa ping atılmaz).
+    pingRoleId: (process.env.TICKET_PING_ROLE_ID || '').trim() || null,
     color: 0x5865f2, // premium blurple
     panelAbout:
       process.env.TICKET_PANEL_ABOUT ||

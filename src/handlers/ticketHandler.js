@@ -253,11 +253,12 @@ async function createTicketFromSelect(interaction, categoryKey) {
 
     setTicketChannel(ticketId, channel.id);
 
-    // Açık ticket paneli
+    // Açık ticket paneli (+ ayarlıysa ekip rolü etiketi)
     const createdUnix = Math.floor(Date.now() / 1000);
+    const pingRole = config.ticket.pingRoleId;
     try {
       const panelMsg = await channel.send({
-        content: `<@${interaction.user.id}>`,
+        content: `<@${interaction.user.id}>${pingRole ? ` <@&${pingRole}>` : ''}`,
         embeds: [
           buildOpenTicketEmbed({
             guild,
