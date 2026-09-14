@@ -29,6 +29,31 @@ function shouldRejoin(attempts) {
   return Number.isInteger(attempts) && attempts < MAX_REJOIN_ATTEMPTS;
 }
 
+function voiceDebugOn() {
+  return process.env.VOICE_DEBUG === 'true';
+}
+
+/**
+ * Katılım hatası taksonomisi (saf fonksiyon — test edilebilir).
+ * Kullanıcıya sade mesaj, terminale teknik detay (çağıran loglar) gider.
+ * Kodlar: NO_CHANNEL | VOICE_UDP_BLOCKED | JOIN_TIMEOUT
+ */
+function classifyJoinError(err, sawConnecting) {
+  if (err?.code === 10003) {
+    return { code: 'NO_CHANNEL', message: 'Ses kanalı bulunamadı (silinmiş olabilir).' };
+  }
+  if (err?.name === 'AbortError' && sawConnecting) {
+    // Gateway sinyali geçti (VOICE_STATE/SERVER_UPDATE OK) ama UDP handshake bitmedi
+    return {
+      code: 'VOICE_UDP_BLOCKED',
+      message:
+        'Ses sunucusuna bağlanılamadı (ses trafiği engelleniyor olabilir). ' +
+        'VPN’i bağlayıp tekrar deneyin veya botu yurtdışında bir sunucuda çalıştırın.',
+    };
+  }
+  return { code: 'JOIN_TIMEOUT', message: 'Ses kanalına bağlanılamadı (ağ zaman aşımı). Lütfen tekrar deneyin.' };
+}
+
 /**
  * Genel UDP çıkış testi: gerçek bir DNS sorgusu gönderip cevap bekler.
  * (UDP'de "gönderim başarısı" anlamsızdır — cevap gelmesi gerekir.)
@@ -125,6 +150,15 @@ function attachHandlers(connection, session) {
       if (newState && newState.status === VoiceConnectionStatus.Disconnected) {
         extra = ` (sebep: ${newState.reason || 'bilinmiyor'})`;
       }
+      if (voiceDebugOn()) {
+        try {
+          const st = connection.state || {};
+          const net = st.networking?.state?.status || st.networking?.status || 'yok';
+          extra += ` | net=${net}`;
+        } catch {
+          /* detay kritik değil */
+        }
+      }
       logger.info(`Ses durumu [+${t}ms]: ${oldState.status} -> ${newState.status}${extra}`);
     } catch {
       /* log kritik değil */
@@ -210,6 +244,12 @@ async function joinVoice(guild, channelOrId) {
   let connection;
   // Gateway sinyali geçip UDP'de takılma oldu mu? (teşhis için izlenir)
   let sawConnecting = false;
+  if (voiceDebugOn()) {
+    logger.info(
+      `Ses katilim: guild=${guildId} kanal=${channel.id} adapter=${typeof guild.voiceAdapterCreator} ` +
+        `(selfDeaf+selfMute, receive yok)`,
+    );
+  }
   try {
     connection = joinVoiceChannel({
       channelId: channel.id,
@@ -243,14 +283,9 @@ async function joinVoice(guild, channelOrId) {
       /* ignore */
     }
     logger.error(`Ses kanalına katılım başarısız: #${channel.name || channel.id}`, err);
-    if (err?.code === 10003) {
-      const e = new Error('Ses kanalı bulunamadı (silinmiş olabilir).');
-      e.code = 'NO_CHANNEL';
-      throw e;
-    }
-    if (err?.name === 'AbortError' && sawConnecting) {
-      // Gateway OK ama ses sunucusuna UDP kurulamadı. Genel UDP çıkışını da
-      // yoklayıp mesajı netleştir (ortam engeli mi, Discord'a özel mi?).
+    const classified = classifyJoinError(err, sawConnecting);
+    if (classified.code === 'VOICE_UDP_BLOCKED') {
+      // Genel UDP çıkışını da yoklayıp mesajı netleştir (ortam engeli mi, Discord'a özel mi?)
       let udpNote = '';
       try {
         const udpOk = await probeUdpEgress();
@@ -260,16 +295,12 @@ async function joinVoice(guild, channelOrId) {
       } catch {
         /* prob kritik değil */
       }
-      const e = new Error(
-        'Ses sunucusuna bağlanılamadı (ses trafiği engelleniyor olabilir). ' +
-          'VPN’i bağlayıp tekrar deneyin veya botu yurtdışında bir sunucuda çalıştırın.' +
-          udpNote,
-      );
-      e.code = 'VOICE_UDP_BLOCKED';
+      const e = new Error(classified.message + udpNote);
+      e.code = classified.code;
       throw e;
     }
-    const e = new Error('Ses kanalına bağlanılamadı (ağ zaman aşımı). Lütfen tekrar deneyin.');
-    e.code = 'JOIN_TIMEOUT';
+    const e = new Error(classified.message);
+    e.code = classified.code;
     throw e;
   }
 
@@ -308,6 +339,7 @@ module.exports = {
   voiceKey,
   shouldRejoin,
   probeUdpEgress,
+  classifyJoinError,
   getSavedVoiceChannel,
   getCurrentChannelId,
   joinVoice,

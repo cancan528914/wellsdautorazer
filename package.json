@@ -8,7 +8,8 @@
     "start": "node index.js",
     "dev": "node index.js",
     "deploy": "node deploy-commands.js",
-    "doctor": "node doctor.js"
+    "doctor": "node doctor.js",
+    "doctor:voice": "node doctor-voice.js"
   },
   "engines": {
     "node": ">=22.5.0"
