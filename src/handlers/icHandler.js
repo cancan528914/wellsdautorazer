@@ -4,7 +4,7 @@
  * Mesaj içeriği API'den çekilir (MessageContent intent'i gerekmez).
  * Buton customId'leri statiktir → restart-safe (panel mesaj ID üzerinden çözülür).
  */
-const { MessageFlags } = require('discord.js');
+const { MessageFlags, PermissionFlagsBits } = require('discord.js');
 const config = require('../config');
 const logger = require('../utils/logger');
 const { canManageTickets } = require('../utils/permissions');
@@ -124,12 +124,17 @@ async function handleIcButton(interaction) {
       } else if (!targetMember) {
         nickNote = '\n⚠️ Kullanıcı sunucuda bulunamadı, takma ad değiştirilemedi.';
       } else {
-        try {
-          await targetMember.setNickname(wanted, `IC onay: ${interaction.user.tag}`);
-          nickNote = `\n✏️ Takma ad değiştirildi: **${wanted}**`;
-        } catch (err) {
-          logger.warn(`IC takma ad değiştirilemedi (${fresh.user_id}): ${err.code || err.message}`);
-          nickNote = '\n⚠️ Takma ad değiştirilemedi (botun Üye Adlarını Yönet yetkisi / rol sıralaması yetersiz olabilir).';
+        const blockReason = diagnoseNickname(interaction.guild, targetMember);
+        if (blockReason) {
+          nickNote = `\n⚠️ Takma ad değiştirilemedi (${blockReason})`;
+        } else {
+          try {
+            await targetMember.setNickname(wanted, `IC onay: ${interaction.user.tag}`);
+            nickNote = `\n✏️ Takma ad değiştirildi: **${wanted}**`;
+          } catch (err) {
+            logger.warn(`IC takma ad değiştirilemedi (${fresh.user_id}): ${err.code || err.message}`);
+            nickNote = '\n⚠️ Takma ad değiştirilemedi (beklenmeyen API hatası, loga yazıldı).';
+          }
         }
       }
     }
@@ -169,4 +174,29 @@ async function handleIcButton(interaction) {
   return true;
 }
 
-module.exports = { handleIcMessage, handleIcButton };
+module.exports = { handleIcMessage, handleIcButton, diagnoseNickname };
+
+/**
+ * Takma ad değişiminin BAŞTAN başarısız olacağı durumları tespit eder.
+ * @returns {string|null} engel yoksa null, varsa kullanıcıya gösterilecek sebep
+ */
+function diagnoseNickname(guild, targetMember) {
+  try {
+    const me = guild?.members?.me;
+    if (!me) return 'bot üye önbelleğinde bulunamadı (tekrar deneyin)';
+    if (!me.permissions?.has?.(PermissionFlagsBits.ManageNicknames)) {
+      return 'bot rolünde **Üye Adlarını Yönet** yetkisi kapalı — Sunucu Ayarları → Roller → bot rolü → yetkilerden açın (rol sırası yetmez, izin şart)';
+    }
+    if (targetMember.id === guild.ownerId) {
+      return 'sunucu sahibinin takma adı Discord tarafından değiştirilemez';
+    }
+    const botTop = me.roles?.highest?.position ?? 0;
+    const tgtTop = targetMember.roles?.highest?.position ?? 0;
+    if (botTop <= tgtTop) {
+      return 'bot rolü hedefin rolünden üstte olmalı — bot rolünü rol listesinde hedefin rollerinin üstüne sürükleyin';
+    }
+    return null;
+  } catch {
+    return null; // teşhis patlarsa denemeye devam et
+  }
+}
