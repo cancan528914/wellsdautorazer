@@ -141,12 +141,6 @@ function buildTicketButtons(status = 'open') {
       .setStyle(ButtonStyle.Secondary)
       .setEmoji('🔒')
       .setDisabled(closed),
-    new ButtonBuilder()
-      .setCustomId('ticket_call')
-      .setLabel('Yetkili Çağır')
-      .setStyle(ButtonStyle.Success)
-      .setEmoji('🔔')
-      .setDisabled(closed),
   );
   const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder()

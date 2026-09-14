@@ -39,6 +39,7 @@ const GROUPS = [
     commands: [
       ['/sesgir', 'Botu ses kanalına sokar (kalır)'],
       ['/sescik', 'Botu ses kanalından çıkarır'],
+      ['/topluses', 'Sesteki herkesi seçilen kanala taşır'],
     ],
   },
   {

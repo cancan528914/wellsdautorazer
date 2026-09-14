@@ -36,9 +36,6 @@ const { fetchChannelMessages, buildTranscriptFile } = require('../utils/transcri
 
 const EPH = (extra = {}) => ({ flags: MessageFlags.Ephemeral, ...extra });
 
-// Yetkili Çağır spam koruması (bellek içi; restartta sıfırlanır — güvenli varsayılan)
-const callCooldown = new Map();
-
 // ---------- Yardımcılar ----------
 
 async function resolveStaffRole(guild) {
@@ -354,7 +351,11 @@ async function handleTicketButton(interaction) {
       case 'ticket_adduser':
         return handleAddUserRequest(interaction);
       case 'ticket_call':
-        return handleCallStaff(interaction);
+        // Kaldırılan özellik: eski panellerde buton hâlâ görünebilir
+        await interaction
+          .reply({ content: 'ℹ️ Yetkili Çağır özelliği kaldırıldı. Gerekirse kanala yazarak yetkililere ulaşın.', flags: MessageFlags.Ephemeral })
+          .catch(() => {});
+        return true;
       default:
         return false;
     }
@@ -628,46 +629,6 @@ async function handleAddUserSelect(interaction) {
   return true;
 }
 
-// ---------- Yetkili çağırma ----------
-
-async function handleCallStaff(interaction) {
-  const ticket = await getTicketOrReply(interaction);
-  if (!ticket) return true;
-  if (ticket.status === 'closed') {
-    await interaction.reply({ content: '⚫ Bu ticket kapalı.', ...EPH() }).catch(() => {});
-    return true;
-  }
-  const staffRoleId = config.ticket.staffRoleId;
-  if (!staffRoleId) {
-    await interaction.reply({ embeds: [buildErrorEmbed('Yetkili rolü ayarlanmamış (TICKET_STAFF_ROLE_ID). Yöneticinize bildirin.')], ...EPH() }).catch(() => {});
-    return true;
-  }
-
-  const key = `${interaction.guildId}:${ticket.channel_id}`;
-  const now = Date.now();
-  const last = callCooldown.get(key) || 0;
-  const waitMs = config.ticket.callCooldownMs - (now - last);
-  if (waitMs > 0) {
-    const secs = Math.ceil(waitMs / 1000);
-    await interaction.reply({ content: `🔔 Yetkililer zaten çağrıldı — **${secs} sn** sonra tekrar deneyin.`, ...EPH() }).catch(() => {});
-    return true;
-  }
-  callCooldown.set(key, now);
-
-  await interaction.reply({ content: '🔔 Yetkili ekip çağrıldı, birazdan burada olacaklar.', ...EPH() }).catch(() => {});
-  await interaction.channel
-    .send({ content: `🔔 <@&${staffRoleId}> — <@${interaction.user.id}> destek ekibini çağırıyor!` })
-    .catch((err) => logger.warn(`Ticket #${ticket.id} çağrı mesajı gönderilemedi: ${err.code || err.message}`));
-  await sendLog(interaction.guild, 'called', {
-    ticketId: ticket.id,
-    userId: ticket.user_id,
-    categoryLabel: ticket.category_label,
-    channelId: ticket.channel_id,
-    actorId: interaction.user.id,
-  });
-  return true;
-}
-
 // ---------- Panel yenileme ----------
 
 /** Kayıtlı panel mesajını düzenler; bulunamazsa kanala taze durum mesajı gönderir. */
@@ -695,5 +656,4 @@ module.exports = {
   createTicketFromSelect,
   handleAddUserSelect,
   sendLog,
-  _callCooldown: callCooldown, // testler için
 };

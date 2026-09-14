@@ -5,7 +5,7 @@
  * - Her DM arası config.dm.delayMs bekler (rate-limit dostu, seri gönderim).
  * - Sonuç ephemeral özet olarak gösterilir.
  */
-const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const config = require('../config');
 const { buildDmResultEmbed, buildErrorEmbed } = require('../utils/embeds');
 const { canUseDm } = require('../utils/permissions');
@@ -19,8 +19,7 @@ module.exports = {
     .setDescription('Sunucudaki üyelere DM gönderir (sadece yetkililer).')
     .addStringOption((opt) =>
       opt.setName('mesaj').setDescription('Gönderilecek mesaj').setRequired(true).setMaxLength(1800),
-    )
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    ),
 
   async execute(interaction) {
     if (!canUseDm(interaction.member)) {

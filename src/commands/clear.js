@@ -16,8 +16,7 @@ module.exports = {
     .setDescription('Belirtilen sayıda mesajı siler (sadece yetkililer).')
     .addIntegerOption((opt) =>
       opt.setName('miktar').setDescription(`Silinecek mesaj sayısı (${config.clear.min}-${config.clear.max})`).setRequired(true),
-    )
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+    ),
 
   async execute(interaction) {
     if (!canUseClear(interaction.member)) {
