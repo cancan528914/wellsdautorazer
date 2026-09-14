@@ -213,12 +213,12 @@ function buildAddUserRow() {
 // ---------- 4. Log embedleri ----------
 
 const LOG_STYLE = {
-  created: { title: '🎫 Ticket Oluşturuldu', color: 0x2ecc71 },
-  closed: { title: '🔒 Ticket Kapatıldı', color: 0xe67e22 },
-  deleted: { title: '🗑️ Ticket Silindi', color: 0xe74c3c },
-  claimed: { title: '🧑‍💼 Ticket Sahiplenildi', color: 0x3498db },
-  user_added: { title: '👤 Ticket’a Kullanıcı Eklendi', color: 0x9b59b6 },
-  called: { title: '🔔 Yetkili Çağrıldı', color: 0xf1c40f },
+  created: { emoji: '🎫', label: 'Oluşturuldu', color: 0x2ecc71 },
+  closed: { emoji: '🔒', label: 'Kapatıldı', color: 0xe67e22 },
+  deleted: { emoji: '🗑️', label: 'Silindi', color: 0xe74c3c },
+  claimed: { emoji: '🧑‍💼', label: 'Sahiplenildi', color: 0x3498db },
+  user_added: { emoji: '👤', label: 'Kullanıcı Eklendi', color: 0x9b59b6 },
+  called: { emoji: '🔔', label: 'Yetkili Çağrıldı', color: 0xf1c40f },
 };
 
 /** "14.09.2026 14:30:20" formatında TR tarih. */
@@ -256,33 +256,36 @@ function buildTopEmbed(rows) {
   return embed;
 }
 
+/**
+ * Tek tip premium log görünümü: `EMOJİ Ticket #id — Olay` başlığı + temiz açıklama bloğu.
+ * Tüm veri korunur (mention + ID). Kapanışta sahiplenen/kapatan/tarih ayrımı durur.
+ */
 function buildLogEmbed(event, { ticketId, userId, categoryLabel, channelId, actorId, extra, claimedBy, closedBy, closedAt } = {}) {
-  const style = LOG_STYLE[event] || { title: '🎫 Ticket Olayı', color: brandColor() };
+  const style = LOG_STYLE[event] || { emoji: '🎫', label: 'Olay', color: brandColor() };
+  const head = ticketId ? `Ticket #${ticketId}` : 'Ticket';
+  const embed = baseEmbed(style.color).setTitle(`${style.emoji} ${head} — ${style.label}`);
+  const L = [];
+  const chanLine = channelId ? `📺 **Kanal:** <#${channelId}>` : null;
 
-  // Kapanış logu: sahiplenen + kapatan + tarih ayrımıyla özel düzen
   if (event === 'closed') {
-    const embed = baseEmbed(style.color).setTitle('🎫 TICKET KAPATILDI');
-    if (ticketId) embed.addFields({ name: 'Ticket', value: `#${ticketId}`, inline: true });
-    if (channelId) embed.addFields({ name: 'Kanal', value: `<#${channelId}>`, inline: true });
-    if (userId) embed.addFields({ name: 'Ticketi Açan', value: `<@${userId}>`, inline: false });
-    if (claimedBy) {
-      embed.addFields({ name: '👤 Ticket Sahibi', value: `<@${claimedBy}>\nID: \`${claimedBy}\``, inline: false });
-    } else {
-      embed.addFields({ name: '👤 Ticket Sahibi', value: '❌ Sahiplenilmedi', inline: false });
-    }
-    if (closedBy) embed.addFields({ name: 'Ticketi Kapatan', value: `<@${closedBy}>`, inline: true });
-    embed.addFields({ name: 'Kapanma Tarihi', value: fmtTrDate(closedAt || Date.now()), inline: true });
-    if (extra) embed.addFields({ name: 'Detay', value: trunc(extra, 1024), inline: false });
-    return embed;
+    if (userId) L.push(`👤 **Açan:** <@${userId}>`);
+    if (claimedBy) L.push(`👤 **Sahibi:** <@${claimedBy}>\n🆔 \`ID: ${claimedBy}\``);
+    else L.push('👤 **Sahibi:** ❌ Sahiplenilmedi');
+    if (closedBy) L.push(`🔒 **Kapatan:** <@${closedBy}>`);
+    L.push(`🕐 **Kapanma:** ${fmtTrDate(closedAt || Date.now())}`);
+    if (chanLine) L.push(chanLine);
+  } else {
+    if (userId) L.push(`👤 **Sahip:** <@${userId}>`);
+    if (categoryLabel) L.push(`📁 **Kategori:** ${trunc(categoryLabel, 100)}`);
+    if (event === 'claimed' && actorId) L.push(`🧑‍💼 **Sahiplenen:** <@${actorId}>`);
+    else if (event === 'deleted' && actorId) L.push(`🗑️ **Silen:** <@${actorId}>`);
+    else if (event === 'called' && actorId) L.push(`🔔 **Çağıran:** <@${actorId}>`);
+    else if (actorId && event !== 'created') L.push(`👤 **İşlem:** <@${actorId}>`);
+    else if (actorId) L.push(`👤 **Açan:** <@${actorId}>`);
+    if (chanLine) L.push(chanLine);
   }
-
-  const embed = baseEmbed(style.color).setTitle(style.title);
-  if (ticketId) embed.addFields({ name: 'Ticket', value: `#${ticketId}`, inline: true });
-  if (userId) embed.addFields({ name: 'Sahip', value: `<@${userId}>`, inline: true });
-  if (categoryLabel) embed.addFields({ name: 'Kategori', value: trunc(categoryLabel, 1024), inline: true });
-  if (channelId) embed.addFields({ name: 'Kanal', value: `<#${channelId}>`, inline: true });
-  if (actorId) embed.addFields({ name: 'İşlemi Yapan', value: `<@${actorId}>`, inline: true });
-  if (extra) embed.addFields({ name: 'Detay', value: trunc(extra, 1024), inline: false });
+  if (extra) L.push(`📎 ${trunc(extra, 500)}`);
+  embed.setDescription(L.length ? L.join('\n') : '—');
   return embed;
 }
 
