@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS tickets (
   category_label TEXT NOT NULL,
   status        TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
   claimed_by    TEXT,
+  claimed_at    INTEGER,
   created_at    INTEGER NOT NULL,
   closed_at     INTEGER,
   closed_by     TEXT
@@ -55,6 +56,16 @@ CREATE TABLE IF NOT EXISTS tickets (
 CREATE INDEX IF NOT EXISTS idx_tickets_guild_user ON tickets (guild_id, user_id, status);
 CREATE INDEX IF NOT EXISTS idx_tickets_channel ON tickets (channel_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets (status);
+
+CREATE TABLE IF NOT EXISTS ticket_stats (
+  guild_id      TEXT NOT NULL,
+  user_id       TEXT NOT NULL,
+  claimed_count INTEGER NOT NULL DEFAULT 0 CHECK (claimed_count >= 0),
+  updated_at    INTEGER NOT NULL,
+  PRIMARY KEY (guild_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ticket_stats_guild ON ticket_stats (guild_id, claimed_count DESC);
 
 CREATE TABLE IF NOT EXISTS settings (
   key        TEXT PRIMARY KEY,

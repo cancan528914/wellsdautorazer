@@ -221,8 +221,61 @@ const LOG_STYLE = {
   called: { title: '🔔 Yetkili Çağrıldı', color: 0xf1c40f },
 };
 
-function buildLogEmbed(event, { ticketId, userId, categoryLabel, channelId, actorId, extra } = {}) {
+/** "14.09.2026 14:30:20" formatında TR tarih. */
+function fmtTrDate(ts) {
+  try {
+    const d = new Date(Number(ts) || Date.now());
+    const p = (n) => String(n).padStart(2, '0');
+    return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  } catch {
+    return '—';
+  }
+}
+
+const TOP_MEDALS = ['🥇', '🥈', '🥉'];
+
+/**
+ * /ticketop embedi. rows: [{ user_id, claimed_count }] (sıralı, max 10).
+ * Sunucuda olmayan kullanıcılar mention+ID olarak düşer (fetch yok, crash yok).
+ */
+function buildTopEmbed(rows) {
+  const list = (rows || []).filter((r) => r && r.user_id).slice(0, 10);
+  const embed = baseEmbed()
+    .setTitle('🏆 Ticket Top 10')
+    .setDescription('En çok ticket sahiplenen yetkililer');
+  if (!list.length) {
+    embed.setDescription('Henüz hiç ticket sahiplenme verisi bulunmuyor.');
+    return embed;
+  }
+  const lines = list.map((r, i) => {
+    const rank = i < 3 ? TOP_MEDALS[i] : `${i + 1}.`;
+    const count = Math.max(0, Number(r.claimed_count) || 0);
+    return `${rank} <@${r.user_id}>\n**${count} Ticket**\nID: \`${r.user_id}\``;
+  });
+  embed.setDescription(lines.join('\n'));
+  return embed;
+}
+
+function buildLogEmbed(event, { ticketId, userId, categoryLabel, channelId, actorId, extra, claimedBy, closedBy, closedAt } = {}) {
   const style = LOG_STYLE[event] || { title: '🎫 Ticket Olayı', color: brandColor() };
+
+  // Kapanış logu: sahiplenen + kapatan + tarih ayrımıyla özel düzen
+  if (event === 'closed') {
+    const embed = baseEmbed(style.color).setTitle('🎫 TICKET KAPATILDI');
+    if (ticketId) embed.addFields({ name: 'Ticket', value: `#${ticketId}`, inline: true });
+    if (channelId) embed.addFields({ name: 'Kanal', value: `<#${channelId}>`, inline: true });
+    if (userId) embed.addFields({ name: 'Ticketi Açan', value: `<@${userId}>`, inline: false });
+    if (claimedBy) {
+      embed.addFields({ name: '👤 Ticket Sahibi', value: `<@${claimedBy}>\nID: \`${claimedBy}\``, inline: false });
+    } else {
+      embed.addFields({ name: '👤 Ticket Sahibi', value: '❌ Sahiplenilmedi', inline: false });
+    }
+    if (closedBy) embed.addFields({ name: 'Ticketi Kapatan', value: `<@${closedBy}>`, inline: true });
+    embed.addFields({ name: 'Kapanma Tarihi', value: fmtTrDate(closedAt || Date.now()), inline: true });
+    if (extra) embed.addFields({ name: 'Detay', value: trunc(extra, 1024), inline: false });
+    return embed;
+  }
+
   const embed = baseEmbed(style.color).setTitle(style.title);
   if (ticketId) embed.addFields({ name: 'Ticket', value: `#${ticketId}`, inline: true });
   if (userId) embed.addFields({ name: 'Sahip', value: `<@${userId}>`, inline: true });
@@ -268,4 +321,6 @@ module.exports = {
   buildAddUserRow,
   buildLogEmbed,
   buildSetupResultEmbed,
+  buildTopEmbed,
+  fmtTrDate,
 };

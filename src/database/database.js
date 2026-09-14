@@ -52,6 +52,7 @@ function migrate(database) {
   const stmts = [
     'ALTER TABLE tickets ADD COLUMN log_message_id TEXT',
     'ALTER TABLE tickets ADD COLUMN panel_message_id TEXT',
+    'ALTER TABLE tickets ADD COLUMN claimed_at INTEGER',
   ];
   for (const sql of stmts) {
     try {
@@ -214,6 +215,8 @@ module.exports = {
   claimTicket,
   closeTicket,
   deleteTicket,
+  incrementClaimStat,
+  getTopClaimers,
   getAllTickets,
   getSetting,
   setSetting,
@@ -334,7 +337,7 @@ function setTicketPanelMessage(id, panelMessageId) {
 
 function claimTicket(id, staffId) {
   try {
-    getDb().prepare('UPDATE tickets SET claimed_by = ? WHERE id = ?').run(String(staffId), Number(id));
+    getDb().prepare('UPDATE tickets SET claimed_by = ?, claimed_at = ? WHERE id = ?').run(String(staffId), Date.now(), Number(id));
   } catch (err) {
     logger.error(`[DB] claimTicket failed: ${id}`, err);
     throw err;
@@ -357,6 +360,41 @@ function deleteTicket(id) {
     getDb().prepare('DELETE FROM tickets WHERE id = ?').run(Number(id));
   } catch (err) {
     logger.error(`[DB] deleteTicket failed: ${id}`, err);
+  }
+}
+
+// ---------- Ticket sahiplenme istatistikleri (sunucu bazlı, kalıcı) ----------
+
+/**
+ * Gerçek bir sahiplenmede +1. Sadece claim anında çağrılır (kapanışta ASLA).
+ * Negatif olamaz (CHECK + clamp).
+ */
+function incrementClaimStat(guildId, userId) {
+  try {
+    getDb()
+      .prepare(
+        'INSERT INTO ticket_stats (guild_id, user_id, claimed_count, updated_at) VALUES (?, ?, 1, ?) ' +
+          'ON CONFLICT(guild_id, user_id) DO UPDATE SET claimed_count = max(0, claimed_count) + 1, updated_at = excluded.updated_at',
+      )
+      .run(String(guildId), String(userId), Date.now());
+  } catch (err) {
+    logger.error(`[DB] incrementClaimStat failed: ${guildId}/${userId}`, err);
+    throw err;
+  }
+}
+
+/** En çok sahiplenenler: sayı azalan, eşitlikte userId artan (deterministik). */
+function getTopClaimers(guildId, limit = 10) {
+  try {
+    const n = Math.max(1, Math.min(100, Number(limit) || 10));
+    return getDb()
+      .prepare('SELECT user_id, claimed_count FROM ticket_stats WHERE guild_id = ? ORDER BY claimed_count DESC, user_id ASC LIMIT ?')
+      .all(String(guildId), n)
+      .map((r) => ({ user_id: String(r.user_id), claimed_count: Math.max(0, Number(r.claimed_count) || 0) }))
+      .filter((r) => r.user_id);
+  } catch (err) {
+    logger.error(`[DB] getTopClaimers failed: ${guildId}`, err);
+    return [];
   }
 }
 

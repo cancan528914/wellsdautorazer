@@ -19,6 +19,7 @@ const {
   claimTicket,
   closeTicket,
   deleteTicket,
+  incrementClaimStat,
 } = require('../database/database');
 const {
   getCategoryByKey,
@@ -388,7 +389,17 @@ async function handleClaim(interaction) {
   }
 
   await interaction.deferReply({ ...EPH() });
+  const prevClaimedBy = ticket.claimed_by ? String(ticket.claimed_by) : null;
   claimTicket(ticket.id, interaction.user.id);
+  // İstatistik SADECE gerçek yeni sahiplenmede +1 (aynı kişinin tekrarı sayılmaz).
+  // Transferde (farklı yetkili) her gerçek sahiplenme sayılır, kapanış etkilemez.
+  if (prevClaimedBy !== String(interaction.user.id)) {
+    try {
+      incrementClaimStat(interaction.guildId, interaction.user.id);
+    } catch {
+      /* istatistik claim akışını engellemez */
+    }
+  }
 
   const embed = buildOpenTicketEmbed({
     guild: interaction.guild,
@@ -476,12 +487,16 @@ async function handleCloseConfirm(interaction, approved) {
 
   logger.success(`Ticket #${ticket.id} kapatıldı (${interaction.user.tag})`);
   const closedFiles = await collectTranscript(ticket, interaction.channel, interaction.guild?.name, 'Kapalı');
+  const freshClosed = getTicket(ticket.id) || ticket; // güncel claimed/closed bilgileri
   await sendLog(interaction.guild, 'closed', {
     ticketId: ticket.id,
     userId: ticket.user_id,
     categoryLabel: ticket.category_label,
     channelId: ticket.channel_id,
     actorId: interaction.user.id,
+    claimedBy: freshClosed.claimed_by ? String(freshClosed.claimed_by) : null,
+    closedBy: freshClosed.closed_by ? String(freshClosed.closed_by) : String(interaction.user.id),
+    closedAt: freshClosed.closed_at || Date.now(),
     ...(closedFiles.length ? { extra: '📄 Transkript dosyası eklendi.' } : {}),
   }, closedFiles);
   await interaction.editReply({ content: '🔒 Ticket kapatıldı.' }).catch(() => {});
