@@ -314,7 +314,7 @@ async function createTicketFromSelect(interaction, categoryKey) {
       logger.warn(`Ticket #${ticketId} form mesajı gönderilemedi: ${err.code || err.message}`);
     }
 
-    logger.success(`Ticket #${ticketId} açıldı: #${channel.name} (${interaction.user.tag}, ${category.label})`);
+    logger.success(`Ticket #${ticketId} açıldı: #${channel.name} (${interaction.user.tag}, ${category.label}) • rol ping: ${pingRole || 'kapalı'}`);
     await sendLog(guild, 'created', {
       ticketId,
       userId: interaction.user.id,

@@ -4,7 +4,7 @@
  */
 const { MessageFlags } = require('discord.js');
 const { buildErrorEmbed } = require('../utils/embeds');
-const { buildTicketPanelEmbed, buildCategoryMenu } = require('../utils/ticketEmbeds');
+const { buildCategoryMenu } = require('../utils/ticketEmbeds');
 const { createTicketFromSelect, handleAddUserSelect } = require('./ticketHandler');
 const logger = require('../utils/logger');
 
@@ -16,11 +16,10 @@ async function handleSelectMenu(interaction) {
 
       const value = interaction.values?.[0];
 
-      // Seçimi sıfırla: menüyü ilk haline döndür
+      // Seçimi sıfırla: SADECE menü ilk haline döner.
+      // Embed'e bilinçli olarak DOKUNULMAZ (panel görseli neyse korunur).
       if (value === 'ticket_reset') {
-        await interaction
-          .update({ embeds: [buildTicketPanelEmbed(interaction.guild)], components: [buildCategoryMenu()] })
-          .catch(() => {});
+        await interaction.update({ components: [buildCategoryMenu()] }).catch(() => {});
         await interaction
           .followUp({ content: '🔄 Seçim sıfırlandı.', flags: MessageFlags.Ephemeral })
           .catch(() => {});
