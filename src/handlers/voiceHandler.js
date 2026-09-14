@@ -67,6 +67,19 @@ function attachHandlers(connection, session) {
   connection.on('error', (err) => {
     logger.error(`Ses bağlantı hatası (guild ${session.guildId}).`, err);
   });
+  // Teşhis kaydı: kopma/düşme noktası terminalde milisaniyesiyle görünür
+  connection.on('stateChange', (oldState, newState) => {
+    try {
+      const t = Date.now() - (session.t0 || Date.now());
+      let extra = '';
+      if (newState && newState.status === VoiceConnectionStatus.Disconnected) {
+        extra = ` (sebep: ${newState.reason || 'bilinmiyor'})`;
+      }
+      logger.info(`Ses durumu [+${t}ms]: ${oldState.status} -> ${newState.status}${extra}`);
+    } catch {
+      /* log kritik değil */
+    }
+  });
   connection.on(VoiceConnectionStatus.Disconnected, async () => {
     if (session.intentional) {
       sessions.delete(session.guildId);
@@ -76,7 +89,8 @@ function attachHandlers(connection, session) {
     if (!shouldRejoin(session.attempts)) {
       logger.error(
         `Ses bağlantısı koptu ve ${MAX_REJOIN_ATTEMPTS} denemede kurulamadı (guild ${session.guildId}). ` +
-          `Kayıtlı kanal korunuyor — restart sonrası tekrar denenecek veya /sesgir ile manuel katılın.`,
+          `Kayıtlı kanal korunuyor — restart sonrası tekrar denenecek veya /sesgir ile manuel katılın. ` +
+          `Sebep için yukarıdaki 'Ses durumu' satırlarına bakın.`,
       );
       sessions.delete(session.guildId);
       try {
@@ -140,6 +154,7 @@ async function joinVoice(guild, channelOrId) {
     attempts: 0,
     intentional: false,
     connection: null,
+    t0: Date.now(),
   };
 
   let connection;
@@ -235,4 +250,5 @@ module.exports = {
   getCurrentChannelId,
   joinVoice,
   leaveVoice,
+  attachHandlers, // test/diagnostik için açık
 };

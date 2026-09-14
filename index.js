@@ -9,6 +9,7 @@ const logger = require('./src/utils/logger');
 const { initDatabase } = require('./src/database/database');
 const { loadCommands } = require('./src/handlers/commandHandler');
 const { buildRestOptions, isNetworkError } = require('./src/utils/restTransport');
+const { createSessionWatch } = require('./src/utils/sessionWatch');
 const readyEvent = require('./src/events/ready');
 const interactionEvent = require('./src/events/interactionCreate');
 const messageEvent = require('./src/events/messageCreate');
@@ -117,6 +118,27 @@ async function main() {
 
   client.on('error', (err) => logger.error('Discord client error.', err));
   client.on('warn', (msg) => logger.warn(`Discord warning: ${msg}`));
+
+  // --- Oturum çakışma dedektörü: aynı token'la 2 örnek = sürekli kopma ---
+  const sessionWatch = createSessionWatch({
+    onWarn: () =>
+      logger.error(
+        'UYARI: Gateway son 5 dakikada 3+ kez koptu! Büyük olasılıkla aynı token ile BAŞKA BİR BOT ÖRNEĞİ çalışıyor ' +
+          '(PC + Railway aynı anda? Railway replicas > 1?). Tek örnek bırakın, yoksa ses dahil her şey kopup durur.',
+      ),
+  });
+  client.on('shardDisconnect', (event, shardId) => {
+    logger.warn(`Gateway bağlantısı koptu (shard ${shardId}, kod: ${event?.code}). Yeniden bağlanılıyor...`);
+    sessionWatch.noteDisconnect();
+  });
+  client.on('shardReconnecting', () => logger.warn('Gateway yeniden bağlanıyor...'));
+  client.on('shardResume', () => logger.success('Gateway oturumu kaldığı yerden devam etti.'));
+  client.on('invalidated', () => {
+    logger.error(
+      'OTURUM GEÇERSİZ KILINDI (invalidated): aynı token ile BAŞKA bir örnek giriş yaptı! ' +
+        'Diğer örneği KAPATIN, yoksa ses dahil her şey kopup durur.',
+    );
+  });
 
   await loginWithRetry(client);
 }
