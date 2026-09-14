@@ -11,6 +11,29 @@ const { canManageTickets } = require('../utils/permissions');
 const { buildErrorEmbed, buildIcPanelEmbed, buildIcButtons } = require('../utils/embeds');
 const { createIcRequest, getIcByPanel, getPendingIc, decideIc, setIcPanel } = require('../database/database');
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Talep metnini çöz: önce event içeriği (MessageContent intent'i açıksa anında),
+ * yoksa API'den kısa retry ile çek. { text, ok } döner.
+ */
+async function resolveIcText(message) {
+  const direct = String(message.content || '').trim();
+  if (direct) return { text: direct.slice(0, 1000), ok: true };
+  for (let i = 0; i < 3; i++) {
+    try {
+      const full = await message.channel.messages.fetch(message.id);
+      const t = String(full?.content || '').trim();
+      if (t) return { text: t.slice(0, 1000), ok: true };
+      return { text: '', ok: true }; // mesaj var ama metin yok (sadece ek olabilir)
+    } catch (err) {
+      if (i === 2) logger.warn(`IC talep içeriği okunamadı: ${message.id} (${err.code || err.message})`);
+      else await sleep(1000);
+    }
+  }
+  return { text: '', ok: false };
+}
+
 async function handleIcMessage(message) {
   const guild = message.guild;
   const user = message.author;
@@ -26,13 +49,7 @@ async function handleIcMessage(message) {
       return;
     }
 
-    let text = '';
-    try {
-      const full = await message.channel.messages.fetch(message.id);
-      text = String(full?.content || '').trim();
-    } catch (err) {
-      logger.warn(`IC talep içeriği okunamadı: ${message.id} (${err.code || err.message})`);
-    }
+    const { text, ok } = await resolveIcText(message);
 
     const id = createIcRequest({
       guildId: guild.id,
@@ -46,7 +63,9 @@ async function handleIcMessage(message) {
       embeds: [
         buildIcPanelEmbed({
           userId: user.id,
+          userTag: user.tag,
           requestedText: text,
+          unreadable: !ok,
           status: 'pending',
           createdUnix: Math.floor(Date.now() / 1000),
         }),
@@ -87,10 +106,39 @@ async function handleIcButton(interaction) {
     decideIc(rec.panel_message_id, approved ? 'approved' : 'rejected', interaction.user.id);
     const fresh = getIcByPanel(rec.panel_message_id) || { ...rec, status: approved ? 'approved' : 'rejected', decided_by: interaction.user.id };
 
+    // Onayda: kullanıcının yazdığı isim doğrudan takma ad yapılır.
+    // (Üye tek sefer çekilir: hem takma ad hem panel etiketi için kullanılır.)
+    let targetMember = null;
+    try {
+      targetMember = (await interaction.guild?.members?.fetch?.(fresh.user_id)) || null;
+    } catch {
+      targetMember = null;
+    }
+    const userTag = targetMember?.user?.tag || null;
+
+    let nickNote = '';
+    if (approved) {
+      const wanted = String(fresh.requested_text || '').trim().slice(0, 32);
+      if (!wanted) {
+        nickNote = '\n⚠️ Talep metni okunamadığı/boş olduğu için takma ad değiştirilemedi.';
+      } else if (!targetMember) {
+        nickNote = '\n⚠️ Kullanıcı sunucuda bulunamadı, takma ad değiştirilemedi.';
+      } else {
+        try {
+          await targetMember.setNickname(wanted, `IC onay: ${interaction.user.tag}`);
+          nickNote = `\n✏️ Takma ad değiştirildi: **${wanted}**`;
+        } catch (err) {
+          logger.warn(`IC takma ad değiştirilemedi (${fresh.user_id}): ${err.code || err.message}`);
+          nickNote = '\n⚠️ Takma ad değiştirilemedi (botun Üye Adlarını Yönet yetkisi / rol sıralaması yetersiz olabilir).';
+        }
+      }
+    }
+
     await interaction.update({
       embeds: [
         buildIcPanelEmbed({
           userId: fresh.user_id,
+          userTag,
           requestedText: fresh.requested_text,
           status: fresh.status,
           decidedBy: fresh.decided_by,
@@ -99,7 +147,7 @@ async function handleIcButton(interaction) {
       components: [buildIcButtons(true)],
     });
     await interaction
-      .followUp({ content: approved ? '✅ Talep onaylandı.' : '❌ Talep reddedildi.', flags: MessageFlags.Ephemeral })
+      .followUp({ content: `${approved ? '✅ Talep onaylandı.' : '❌ Talep reddedildi.'}${nickNote}`, flags: MessageFlags.Ephemeral })
       .catch(() => {});
     logger.success(`IC talebi #${rec.id} ${approved ? 'onaylandı' : 'reddedildi'} (${interaction.user.tag})`);
   } catch (err) {

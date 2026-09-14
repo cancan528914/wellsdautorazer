@@ -76,8 +76,11 @@ async function main() {
     intents: [
       GatewayIntentBits.Guilds, // slash command + butonlar için zorunlu
       GatewayIntentBits.GuildMembers, // /dmmesaj üye listesi için zorunlu (Developer Portal'da SERVER MEMBERS INTENT açın)
-      GatewayIntentBits.GuildMessages, // /clear için
+      GatewayIntentBits.GuildMessages, // /clear + IC kanal takibi için
       GatewayIntentBits.GuildVoiceStates, // ses kanalı bağlantısı için zorunlu (VOICE_STATE_UPDATE almadan voice Ready olmaz)
+      // IC isim içeriğini anında okumak için. Portal'da MESSAGE CONTENT INTENT açılmalı;
+      // kapalıysa bot API'den çekmeye devam eder (biraz daha yavaş).
+      GatewayIntentBits.MessageContent,
     ],
     partials: [Partials.GuildMember, Partials.Channel, Partials.User],
     rest: buildRestOptions(),

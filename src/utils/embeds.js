@@ -94,14 +94,16 @@ function buildErrorEmbed(description) {
 /**
  * IC isim onay paneli. status: 'pending' | 'approved' | 'rejected'
  */
-function buildIcPanelEmbed({ userId, requestedText, status = 'pending', decidedBy = null, createdUnix = null }) {
+function buildIcPanelEmbed({ userId, userTag = null, requestedText, unreadable = false, status = 'pending', decidedBy = null, createdUnix = null }) {
   const statusText =
     status === 'approved' ? `✅ Onaylandı${decidedBy ? ` — <@${decidedBy}>` : ''}` : status === 'rejected' ? `❌ Reddedildi${decidedBy ? ` — <@${decidedBy}>` : ''}` : '🟡 Onay Bekliyor';
+  const text = String(requestedText || '').trim();
+  const talepValue = text ? `\`\`\`\n${text.slice(0, 1000)}\n\`\`\`` : unreadable ? '*okunamadı*' : '*boş mesaj*';
   const embed = baseEmbed(config.colors.clear)
     .setTitle('📝 IC İsim Talebi')
     .addFields(
-      { name: 'Kullanıcı:', value: `<@${userId}>`, inline: false },
-      { name: 'Talep Edilen İsim:', value: requestedText ? `\`\`\`\n${String(requestedText).slice(0, 1000)}\n\`\`\`` : '*okunamadı*', inline: false },
+      { name: 'Kullanıcı:', value: userTag ? `<@${userId}>\n\`${userTag}\`` : `<@${userId}>`, inline: false },
+      { name: 'Talep Edilen İsim:', value: talepValue, inline: false },
       { name: 'Durum:', value: statusText, inline: false },
     );
   if (createdUnix) embed.setDescription(`<t:${createdUnix}:R> oluşturuldu.`);
