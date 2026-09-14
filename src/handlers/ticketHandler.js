@@ -253,12 +253,28 @@ async function createTicketFromSelect(interaction, categoryKey) {
 
     setTicketChannel(ticketId, channel.id);
 
-    // Açık ticket paneli (+ ayarlıysa ekip rolü etiketi)
+    // Açık ticket paneli (+ ayarlıysa ekip rolü etiketi — bildirim garantili:
+    // rol mention'a kapalıysa geçici açılır, mesaj sonrası eski haline döndürülür)
     const createdUnix = Math.floor(Date.now() / 1000);
     const pingRole = config.ticket.pingRoleId;
+    let mentionableOpened = false;
+    if (pingRole) {
+      try {
+        const role = await guild.roles.fetch(pingRole).catch(() => null);
+        if (!role) {
+          logger.warn(`Ping rolü bulunamadı: ${pingRole} (etiket yine de denenecek)`);
+        } else if (!role.mentionable) {
+          await role.setMentionable(true, 'Ticket açılış pingi');
+          mentionableOpened = true;
+        }
+      } catch (err) {
+        logger.warn(`Rol mention hazırlığı başarısız: ${err.code || err.message} (etiket yine de denenecek)`);
+      }
+    }
     try {
       const panelMsg = await channel.send({
         content: `<@${interaction.user.id}>${pingRole ? ` <@&${pingRole}>` : ''}`,
+        allowedMentions: { users: [interaction.user.id], ...(pingRole ? { roles: [pingRole] } : {}) },
         embeds: [
           buildOpenTicketEmbed({
             guild,
@@ -277,6 +293,16 @@ async function createTicketFromSelect(interaction, categoryKey) {
       deleteTicket(ticketId);
       logger.error(`Ticket paneli gönderilemedi (ticket #${ticketId}).`, err);
       return interaction.editReply({ embeds: [buildErrorEmbed('Ticket paneli gönderilemedi. Lütfen tekrar deneyin.')] });
+    } finally {
+      // Geçici açılan mention izni HER HALDE geri kapatılır
+      if (mentionableOpened && pingRole) {
+        try {
+          const role = await guild.roles.fetch(pingRole).catch(() => null);
+          if (role) await role.setMentionable(false, 'Ticket pingi tamamlandı').catch(() => {});
+        } catch {
+          /* sessiz geç */
+        }
+      }
     }
 
     // Kategoriye özel form (örn. başvuru soruları) — ayrı mesaj olarak gönderilir.
