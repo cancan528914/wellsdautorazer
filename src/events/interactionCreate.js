@@ -79,12 +79,13 @@ module.exports = {
           return interaction.reply({ embeds: [buildErrorEmbed('Bu komut bulunamadı.')], flags: MessageFlags.Ephemeral }).catch(() => {});
         }
         // Global erişim kapısı: liste doluysa sadece izinli roller + adminler.
-        // İstisnalar: openToRoleManagers (/rolver+/rolal), openToBanManagers (/ban+/unban).
-        // İşaretli komutlar ilgili listedekilere de açıktır — başka komutları açmaz.
+        // İstisnalar: openToEveryone (herkes), openToRoleManagers (/rolver+/rolal),
+        // openToBanManagers (/ban+/unban). İşaretli komutlar ilgili kitleye de açıktır.
         const globalOk = hasCommandAccess(interaction.member);
+        const everyoneOk = command.openToEveryone === true;
         const roleOk = command.openToRoleManagers === true && canManageRoles(interaction.member);
         const banOk = command.openToBanManagers === true && canManageBan(interaction.member);
-        if (!globalOk && !roleOk && !banOk) {
+        if (!globalOk && !everyoneOk && !roleOk && !banOk) {
           return interaction.reply({ embeds: [buildErrorEmbed('Bu botu kullanma yetkin yok.')], flags: MessageFlags.Ephemeral }).catch(() => {});
         }
         await command.execute(interaction);

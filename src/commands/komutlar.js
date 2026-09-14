@@ -90,6 +90,8 @@ function buildKomutlarEmbed() {
 
 module.exports = {
   data: new SlashCommandBuilder().setName('komutlar').setDescription('Tüm komutları ve ne işe yaradıklarını gösterir.'),
+  // Global kapıdan muaf: yardım menüsü herkese açık (kullanım yetkileri ayrıca denetlenir).
+  openToEveryone: true,
 
   async execute(interaction) {
     try {

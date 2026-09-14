@@ -112,11 +112,27 @@ module.exports = {
       if (typeof timer.unref === 'function') timer.unref();
     }
 
+    // Profil durumu rotasyonu: 5sn'de bir değişen "İzliyor" metni (sonsuz döngü).
+    // Liste buradan düzenlenir. (Discord ~5sn sıklığa izin verir, daha hızlı yapmayın.)
+    const PRESENCE_ROTATION = ['Well SD 🤍 Javrex', 'Well SD 🤍 Martı', 'Well SD 🤍 Egax'];
+    const PRESENCE_INTERVAL_MS = 5000;
     try {
-      client.user.setPresence({
-        activities: [{ name: 'WELLSD AUTORAZER | /ingame', type: ActivityType.Watching }],
-        status: 'online',
-      });
+      let presenceIdx = 0;
+      const applyPresence = () => {
+        try {
+          client.user.setPresence({
+            activities: [{ name: PRESENCE_ROTATION[presenceIdx % PRESENCE_ROTATION.length], type: ActivityType.Watching }],
+            status: 'online',
+          });
+          presenceIdx++;
+        } catch {
+          /* presence kritik değil */
+        }
+      };
+      applyPresence();
+      const presenceTimer = setInterval(applyPresence, PRESENCE_INTERVAL_MS);
+      if (typeof presenceTimer.unref === 'function') presenceTimer.unref();
+      logger.info(`Profil rotasyonu aktif (${PRESENCE_ROTATION.length} metin, ${PRESENCE_INTERVAL_MS}ms)`);
     } catch {
       /* presence kritik değil */
     }
