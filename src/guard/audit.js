@@ -57,6 +57,11 @@ async function findExecutor(guild, auditType, targetId, opts = {}) {
       const cached = toCacheable(logs?.entries);
       try {
         auditCache.set(cacheKey, { ts: Date.now(), entries: cached });
+        if (auditCache.size > 200) {
+          // en eski girdileri buda (memory leak yok)
+          const sorted = [...auditCache.entries()].sort((a, b) => a[1].ts - b[1].ts);
+          for (const [k] of sorted.slice(0, auditCache.size - 200)) auditCache.delete(k);
+        }
       } catch {
         /* ignore */
       }

@@ -1,18 +1,20 @@
 /**
- * /guardekle - Kullanıcıyı Guard whitelist'ine ekler/günceller (sadece adminler).
- * Whitelistte olmak bu komuta erişim vermez.
+ * /guardekle - Kullanıcıyı Guard whitelist'ine ekler/günceller (sadece Guard yöneticileri).
+ * Whitelistte olmak bu komuta erişim vermez. Kullanım config loguna yazılır.
  */
-const { SlashCommandBuilder, MessageFlags } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
+const config = require('../config');
 const { buildErrorEmbed } = require('../utils/embeds');
 const { setGuardLevel } = require('../database/database');
 const { canManageGuard } = require('../guard/permissions');
+const { sendConfigLog } = require('../guard/logger');
 const { LEVEL_META } = require('../guard/constants');
 const logger = require('../utils/logger');
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('guardekle')
-    .setDescription('Kullanıcıyı Guard whitelistine ekler (sadece adminler).')
+    .setDescription('Kullanıcıyı Guard whitelistine ekler (sadece Guard yöneticileri).')
     .addUserOption((opt) => opt.setName('user').setDescription('Whiteliste eklenecek kişi').setRequired(true))
     .addIntegerOption((opt) =>
       opt
@@ -44,12 +46,25 @@ module.exports = {
       const { created } = setGuardLevel(interaction.guildId, user.id, level, interaction.user.id);
       const meta = LEVEL_META[level];
       logger.success(`Guard whitelist ${created ? 'eklendi' : 'güncellendi'}: ${user.tag} → ${meta.label}`);
-      return interaction.reply({
-        content: created
-          ? `✅ <@${user.id}> **${meta.emoji} ${meta.label}** olarak whitelist'e eklendi.`
-          : `🔄 <@${user.id}> seviyesi **${meta.emoji} ${meta.label}** olarak güncellendi.`,
-        flags: MessageFlags.Ephemeral,
-      });
+      await sendConfigLog(interaction.guild, {
+        executor: interaction.user,
+        action: '/guardekle',
+        target: `<@${user.id}>`,
+        detail: `New Level: ${meta.emoji} ${meta.label} (${created ? 'yeni kayıt' : 'güncelleme'})`,
+        resultOk: true,
+      }).catch(() => {});
+      const embed = new EmbedBuilder()
+        .setColor(config.colors?.guardConfig ?? 0x3498db)
+        .setTitle('🛡️ GUARD YETKİSİ VERİLDİ')
+        .addFields(
+          { name: 'Kullanıcı', value: `<@${user.id}>`, inline: true },
+          { name: 'ID', value: `\`${user.id}\``, inline: true },
+          { name: 'Seviye', value: `${meta.emoji} ${meta.label}`, inline: false },
+          { name: 'İşlemi yapan', value: `<@${interaction.user.id}>`, inline: false },
+        )
+        .setFooter({ text: `${config.botName} | Guard` })
+        .setTimestamp();
+      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     } catch (err) {
       logger.error('Interaction failed: /guardekle.', err);
       const payload = { embeds: [buildErrorEmbed('Kayıt sırasında bir hata oluştu.')], flags: MessageFlags.Ephemeral };

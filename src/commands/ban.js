@@ -8,6 +8,7 @@ const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('disc
 const { buildErrorEmbed } = require('../utils/embeds');
 const { canManageBan } = require('../utils/permissions');
 const { guardCoverNote } = require('../guard/permissions');
+const { sendModLog } = require('../utils/modlog');
 const logger = require('../utils/logger');
 
 module.exports = {
@@ -64,6 +65,10 @@ module.exports = {
       const reason = `Ban: ${interaction.user.tag}${sebep ? ` — ${sebep}` : ''}`.slice(0, 512);
       await interaction.guild.members.ban(targetUser.id, { reason, deleteMessageSeconds: sil * 86400 });
       logger.success(`Ban: ${targetUser.tag} (yapan: ${interaction.user.tag}${sebep ? `, sebep: ${sebep}` : ''})`);
+      await sendModLog(interaction.guild, {
+        kind: 'ban', ok: true, targetId: targetUser.id, targetTag: targetUser.tag,
+        executor: interaction.user, reason: sebep || undefined,
+      }).catch(() => {});
       const note = guardCoverNote(interaction.guildId, interaction.user.id);
       return interaction.editReply({ content: `🔨 <@${targetUser.id}> banlandı.${sebep ? `\nSebep: ${sebep}` : ''}${note}` });
     } catch (err) {
@@ -71,6 +76,11 @@ module.exports = {
       let msg = 'Ban atılırken bir hata oluştu.';
       if (err?.code === 50013) msg = 'Ban atılamadı — bot yetkisini ve rol sıralamasını kontrol edin.';
       else if (err?.code === 404 || err?.code === 10013) msg = 'Kullanıcı bulunamadı.';
+      await sendModLog(interaction.guild, {
+        kind: 'ban', ok: false, targetId: targetUser?.id || '?', targetTag: targetUser?.tag,
+        executor: interaction.user, reason: sebep || undefined,
+        detail: `Error Code: ${err?.code || '?'}`,
+      }).catch(() => {});
       return interaction.editReply({ embeds: [buildErrorEmbed(msg)] }).catch(() => {});
     }
   },

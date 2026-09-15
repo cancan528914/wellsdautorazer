@@ -1,21 +1,24 @@
 /**
- * /guardsetup - Guard kurulum sihirbazı (sadece adminler).
+ * /guardsetup - Guard kurulum sihirbazı (sadece Guard yöneticileri).
  * - Log kanalı yoksa oluşturur (varsa devralır, whitelist asla silinmez).
- * - Bot permissionlarını + Audit Log erişimini raporlar.
- * - Guard'ı bu sunucuda aktif eder.
+ * - Bot permissionları + Audit Log + sistem health raporlar.
+ * - Guard'ı bu sunucuda aktif eder. Kullanım config loguna yazılır.
  */
 const { SlashCommandBuilder, EmbedBuilder, ChannelType, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const config = require('../config');
 const { buildErrorEmbed } = require('../utils/embeds');
 const { getGuardSettings, saveGuardSettings, listWhitelist } = require('../database/database');
 const { canManageGuard } = require('../guard/permissions');
+const { sendConfigLog } = require('../guard/logger');
+const { checkHealth } = require('../guard/health');
 const { REQUIRED_PERMS } = require('../guard/constants');
 const logger = require('../utils/logger');
 
 const GUARD_LOG_NAME = 'guard-log';
+const tick = (ok) => (ok ? '🟢' : '🔴');
 
 module.exports = {
-  data: new SlashCommandBuilder().setName('guardsetup').setDescription('Guard sistemini kurar (sadece adminler).'),
+  data: new SlashCommandBuilder().setName('guardsetup').setDescription('Guard sistemini kurar ve sağlığını raporlar.'),
 
   async execute(interaction) {
     if (!interaction.guild) {
@@ -58,14 +61,14 @@ module.exports = {
         const existing = await guild.channels.fetch(settings.log_channel_id).catch(() => null);
         if (existing?.isTextBased()) {
           logChannel = existing;
-          logState = '♻️ Mevcut kanal korundu';
+          logState = 'korundu';
         }
       }
       if (!logChannel && typeof guild.channels.cache?.find === 'function') {
         const byName = guild.channels.cache.find((c) => c.name === GUARD_LOG_NAME && c.type === ChannelType.GuildText) || null;
         if (byName) {
           logChannel = byName;
-          logState = '♻️ Mevcut kanal devralındı';
+          logState = 'devralındı';
         }
       }
       if (!logChannel) {
@@ -92,7 +95,7 @@ module.exports = {
               },
             ],
           });
-          logState = '🆕 Yeni oluşturuldu';
+          logState = 'oluşturuldu';
         } catch (err) {
           logger.error('Guard log kanalı oluşturulamadı.', err);
           return interaction.editReply({ embeds: [buildErrorEmbed('Log kanalı oluşturulamadı — bot yetkilerini kontrol edin.')] });
@@ -100,26 +103,41 @@ module.exports = {
       }
       saveGuardSettings(guild.id, { logChannelId: logChannel.id, enabled: true });
 
+      // 4. Sistem health
+      const health = await checkHealth(interaction.client, guild).catch(() => ({ ok: false, checks: [] }));
+      const healthLine = (health.checks || [])
+        .map((c) => `${tick(c.ok)} ${c.label}`)
+        .join('\n')
+        .slice(0, 1000);
+
       const wlCount = listWhitelist(guild.id).length;
       const embed = new EmbedBuilder()
-        .setColor(missing.length ? 0xe67e22 : 0x2ecc71)
-        .setTitle('🛡️ GUARD SETUP')
+        .setColor(config.colors?.guardConfig ?? 0x3498db)
+        .setTitle('🛡️ GUARD SYSTEM SETUP')
         .addFields(
-          { name: 'Durum', value: '✅ Guard aktif', inline: false },
-          { name: 'Log Kanalı', value: `<#${logChannel.id}> (${logState})`, inline: false },
+          { name: 'System', value: `${tick(!missing.length && auditOk)} ${missing.length || !auditOk ? 'EKSİKLERLE ONLINE' : 'ONLINE'}`, inline: false },
+          { name: 'Audit Log', value: auditOk ? `${tick(true)} READY` : `${tick(false)} ERİŞİLEMİYOR`, inline: true },
+          { name: 'Logging', value: `${tick(true)} ENABLED (<#${logChannel.id}>)`, inline: true },
           {
-            name: 'Koruma',
-            value: '✅ Rol Guard\n✅ Kanal Guard\n✅ Ban/Kick Guard\n✅ URL Guard',
+            name: 'Protection',
+            value: `${tick(true)} ROLE\n${tick(true)} CHANNEL\n${tick(true)} BAN/KICK\n${tick(true)} URL`,
             inline: true,
           },
-          { name: 'Audit Log', value: auditOk ? '✅ Aktif' : '❌ Erişilemiyor (Denetim Kaydını Görüntüle yetkisi gerekli)', inline: true },
-          { name: 'Whitelist', value: `${wlCount} kullanıcı (korundu)`, inline: false },
+          { name: 'Rollback', value: `${tick(true)} ENABLED`, inline: true },
+          { name: 'Whitelist', value: `${wlCount} USERS (korundu)`, inline: false },
+          { name: 'Bot Permissions', value: missing.length ? `🔴 EKSİK:\n${missing.map((m) => `• ${m}`).join('\n').slice(0, 800)}` : `${tick(true)} OK`, inline: false },
+          { name: '🩺 Health', value: healthLine || 'ölçülemedi', inline: false },
         )
         .setFooter({ text: `${config.botName} | Guard` })
         .setTimestamp();
-      if (missing.length) {
-        embed.addFields({ name: '⚠️ Eksik Bot Yetkileri', value: missing.map((m) => `• ${m}`).join('\n').slice(0, 1000), inline: false });
-      }
+
+      await sendConfigLog(guild, {
+        executor: interaction.user,
+        action: '/guardsetup',
+        target: `<#${logChannel.id}>`,
+        detail: `Kurulum tamamlandı (whitelist: ${wlCount})`,
+        resultOk: true,
+      }).catch(() => {});
 
       logger.success(`Guard setup tamam: ${guild.name} (log: #${logChannel.name || logChannel.id})`);
       return interaction.editReply({ embeds: [embed] });

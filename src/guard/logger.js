@@ -1,16 +1,83 @@
 /**
- * Guard log gönderici: ban / threat / unresolved embedleri.
+ * Guard log gönderici: ban / threat / unverified / allowed / config / panel-access.
+ * Renkler merkezi config temasından gelir (guardBan/Warn/Allowed/Config/Panel).
+ * Log kanalı yoksa OTOMATİK yeniden oluşturulur (log-kanal koruması).
  */
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, ChannelType, PermissionFlagsBits } = require('discord.js');
 const config = require('../config');
 const logger = require('../utils/logger');
-const { getGuardSettings } = require('../database/database');
+const { getGuardSettings, saveGuardSettings } = require('../database/database');
 const { LOGCHANNEL_CACHE_TTL_MS } = require('./constants');
+
+const LOG_CHANNEL_NAME = 'guard-log';
 
 // guildId -> { ts, id, channel } — her ihlalde 1 GET kazanır
 const channelCache = new Map();
 
 const trDate = () => new Date().toLocaleString('tr-TR', { hour12: false });
+
+const C = () => ({
+  ban: config.colors?.guardBan ?? 0xe74c3c,
+  warn: config.colors?.guardWarn ?? 0xe67e22,
+  allowed: config.colors?.guardAllowed ?? 0x2ecc71,
+  config: config.colors?.guardConfig ?? 0x3498db,
+  panel: config.colors?.guardPanel ?? 0x9b59b6,
+  grey: 0x95a5a6,
+});
+
+function baseEmbed(color) {
+  return new EmbedBuilder()
+    .setColor(color)
+    .setFooter({ text: `${config.botName} | Guard` })
+    .setTimestamp();
+}
+
+function userLabel(executor) {
+  if (!executor) return { mention: '`bilinmiyor`', tag: 'Bilinmeyen', id: '—' };
+  const id = String(executor.id || executor.user_id || '—');
+  return { mention: `<@${id}>`, tag: executor.tag || 'Bilinmeyen', id };
+}
+
+/** Kayıtlı kanal yoksa/silinmişse yeniden oluşturur (ayar korunur). */
+async function ensureLogChannel(guild) {
+  try {
+    const settings = getGuardSettings(guild.id);
+    if (settings?.log_channel_id) {
+      const existing = await guild.channels.fetch(settings.log_channel_id).catch(() => null);
+      if (existing?.isTextBased()) return existing;
+      logger.warn(`Guard log kanalı silinmiş (${settings.log_channel_id}), yeniden oluşturuluyor.`);
+    }
+    const me = guild.members?.me;
+    if (!me?.permissions?.has(PermissionFlagsBits.ManageChannels)) {
+      logger.warn('Guard log kanalı oluşturulamadı: Kanalları Yönet yetkisi yok.');
+      return null;
+    }
+    const created = await guild.channels.create({
+      name: LOG_CHANNEL_NAME,
+      type: ChannelType.GuildText,
+      topic: 'WELLSD AUTORAZER Guard kayıtları (otomatik kurtarma)'.slice(0, 1024),
+      permissionOverwrites: [
+        { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+        {
+          id: me.id,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory,
+            PermissionFlagsBits.EmbedLinks,
+          ],
+        },
+      ],
+    });
+    saveGuardSettings(guild.id, { logChannelId: created.id, enabled: settings?.enabled ?? true });
+    channelCache.set(guild.id, { ts: Date.now(), id: created.id, channel: created });
+    logger.success(`Guard log kanalı kurtarıldı: #${created.name}`);
+    return created;
+  } catch (err) {
+    logger.error('Guard log kanalı kurtarılamadı.', err);
+    return null;
+  }
+}
 
 async function getLogChannel(guild) {
   try {
@@ -23,64 +90,52 @@ async function getLogChannel(guild) {
     const hit = channelCache.get(guild.id);
     if (hit && hit.id === id && Date.now() - hit.ts < LOGCHANNEL_CACHE_TTL_MS) return hit.channel;
     const ch = await guild.channels.fetch(id).catch(() => null);
-    if (!ch?.isTextBased()) {
-      channelCache.delete(guild.id);
-      logger.warn(`Guard log kanalı bulunamadı: ${id}`);
-      return null;
+    if (ch?.isTextBased()) {
+      channelCache.set(guild.id, { ts: Date.now(), id, channel: ch });
+      return ch;
     }
-    channelCache.set(guild.id, { ts: Date.now(), id, channel: ch });
-    return ch;
+    // Silinmiş → otomatik kurtar
+    channelCache.delete(guild.id);
+    return ensureLogChannel(guild);
   } catch (err) {
     logger.error('Guard log kanalı çözülemedi.', err);
     return null;
   }
 }
 
-function baseEmbed(color) {
-  return new EmbedBuilder()
-    .setColor(color)
-    .setFooter({ text: `${config.botName} | Guard` })
-    .setTimestamp();
-}
-
-function userLabel(executor) {
-  if (!executor) return { mention: '`bilinmiyor`', tag: 'Bilinmeyen', id: '—' };
-  const id = String(executor.id || '—');
-  return { mention: `<@${id}>`, tag: executor.tag || 'Bilinmeyen', id };
-}
-
-/** TEST 11/12 + spec 15-20: ban ve threat logları. */
-async function sendBanLog(guild, { executor, actionLabel, guardLabel, targetDesc, punishment, rollback }) {
+/** §23 formatı: ban öncesi yakalanan snapshot kullanılır. */
+async function sendBanLog(guild, { executor, actionLabel, guardLabel, targetDesc, punishment, rollback, sensitive = false }) {
   const ch = await getLogChannel(guild);
   if (!ch) return false;
   const u = userLabel(executor);
   const punished = punishment?.ok;
-  const embed = baseEmbed(punished ? 0xe74c3c : 0xf1c40f)
+  const embed = baseEmbed(punished ? C().ban : C().warn)
     .setTitle(punished ? '🛡️ GUARD — USER BANNED' : '🛡️ GUARD — THREAT DETECTED')
     .addFields(
-      { name: '👤 Kullanıcı', value: u.mention, inline: true },
-      { name: '📛 Kullanıcı Adı', value: u.tag.slice(0, 100), inline: true },
-      { name: '🆔 Kullanıcı ID', value: `\`${u.id}\``, inline: false },
-      { name: '🚨 Tetiklenen Guard', value: guardLabel, inline: true },
-      { name: '⚠️ Yapılan İşlem', value: actionLabel, inline: true },
-      { name: '🎯 Hedef', value: String(targetDesc || '—').slice(0, 200), inline: false },
-      { name: '🔍 Audit Log Executor', value: u.mention, inline: true },
+      { name: 'Executor', value: u.mention, inline: true },
+      { name: 'Executor ID', value: `\`${u.id}\``, inline: true },
+      { name: 'Action', value: String(actionLabel || '—').slice(0, 200), inline: false },
+      { name: 'Target', value: String(targetDesc || '—').slice(0, 200), inline: false },
+      { name: 'Triggered Protection', value: String(guardLabel || '—').slice(0, 100), inline: true },
       {
-        name: '🔨 Ceza',
-        value: punished ? 'Sunucudan Banlandı' : `❌ Ban başarısız\nSebep: ${punishment?.detail || 'bilinmiyor'}`,
-        inline: false,
+        name: 'Punishment',
+        value: punished ? '🔨 BANNED' : `❌ Ban başarısız\nSebep: ${punishment?.detail || 'bilinmiyor'}`,
+        inline: true,
       },
       {
-        name: '↩️ Rollback',
+        name: 'Rollback',
         value: !rollback
           ? 'Uygulanmadı'
           : rollback.ok
-            ? `✅ Başarılı\n${rollback.detail}`
+            ? `✅ SUCCESS\n${rollback.detail}`
             : `❌ Başarısız\nSebep: ${rollback.detail}`,
         inline: false,
       },
-      { name: '🕐 Tarih', value: trDate(), inline: false },
+      { name: 'Time', value: trDate(), inline: false },
     );
+  if (sensitive) {
+    embed.addFields({ name: '🛡️ Hassas Hedef', value: 'Botun kritik rollerinden biri hedef alındı.', inline: false });
+  }
   try {
     await ch.send({ embeds: [embed] });
     return true;
@@ -90,17 +145,19 @@ async function sendBanLog(guild, { executor, actionLabel, guardLabel, targetDesc
   }
 }
 
+/** §25: eşleşme belirsizse ceza YOK, açık log var. */
 async function sendUnresolvedLog(guild, { actionLabel, targetDesc, reason }) {
   const ch = await getLogChannel(guild);
   if (!ch) return false;
-  const embed = baseEmbed(0x95a5a6)
-    .setTitle('🛡️ GUARD — Executor Bulunamadı')
-    .setDescription('Kritik bir işlem tespit edildi ancak Audit Log’da executor doğrulanamadı. Ceza uygulanmadı.')
+  const embed = baseEmbed(C().warn)
+    .setTitle('⚠️ GUARD — UNVERIFIED ACTION')
+    .setDescription('Audit Log güvenilir şekilde eşleşmedi. Ceza uygulanmadı.')
     .addFields(
-      { name: '⚠️ İşlem', value: actionLabel, inline: true },
-      { name: '🎯 Hedef', value: String(targetDesc || '—').slice(0, 200), inline: true },
-      { name: '🔍 Sebep', value: String(reason || 'Audit Log eşleşmedi.').slice(0, 500), inline: false },
-      { name: '🕐 Tarih', value: trDate(), inline: false },
+      { name: 'Action', value: String(actionLabel || '—').slice(0, 200), inline: true },
+      { name: 'Target', value: String(targetDesc || '—').slice(0, 200), inline: true },
+      { name: 'Reason', value: String(reason || 'Audit Log executor doğrulanamadı.').slice(0, 500), inline: false },
+      { name: 'Result', value: '⚠️ NO PUNISHMENT', inline: false },
+      { name: 'Time', value: trDate(), inline: false },
     );
   try {
     await ch.send({ embeds: [embed] });
@@ -111,4 +168,84 @@ async function sendUnresolvedLog(guild, { actionLabel, targetDesc, reason }) {
   }
 }
 
-module.exports = { getLogChannel, sendBanLog, sendUnresolvedLog, _channelCache: channelCache };
+/** §14: URL Guard izinli işlemi — internal kayıt (ban logu DEĞİL). */
+async function sendAllowedLog(guild, { executor, levelLabel, actionLabel, targetDesc }) {
+  const ch = await getLogChannel(guild);
+  if (!ch) return false;
+  const u = userLabel(executor);
+  const embed = baseEmbed(C().allowed)
+    .setTitle('🛡️ GUARDED ACTION')
+    .addFields(
+      { name: 'Executor', value: u.mention, inline: true },
+      { name: 'Level', value: String(levelLabel || '—').slice(0, 100), inline: true },
+      { name: 'Action', value: String(actionLabel || '—').slice(0, 200), inline: false },
+      { name: 'Target', value: String(targetDesc || '—').slice(0, 200), inline: false },
+      { name: 'Result', value: '✅ ALLOWED', inline: false },
+      { name: 'Time', value: trDate(), inline: false },
+    );
+  try {
+    await ch.send({ embeds: [embed] });
+    return true;
+  } catch (err) {
+    logger.error('Guard allowed logu gönderilemedi.', err);
+    return false;
+  }
+}
+
+/** §20: yönetim komutu kullanımı (saldırı loglarından ayrı). */
+async function sendConfigLog(guild, { executor, action, target, detail, resultOk = true }) {
+  const ch = await getLogChannel(guild);
+  if (!ch) return false;
+  const u = userLabel(executor);
+  const embed = baseEmbed(C().config)
+    .setTitle('⚙️ GUARD CONFIG ACTION')
+    .addFields(
+      { name: 'Executor', value: u.mention, inline: true },
+      { name: 'Action', value: String(action || '—').slice(0, 100), inline: true },
+      { name: 'Target', value: target ? String(target).slice(0, 200) : '—', inline: false },
+      { name: 'Detail', value: String(detail || '—').slice(0, 500), inline: false },
+      { name: 'Result', value: resultOk ? '✅ Success' : '❌ Failed', inline: true },
+      { name: 'Time', value: trDate(), inline: false },
+    );
+  try {
+    await ch.send({ embeds: [embed] });
+    return true;
+  } catch (err) {
+    logger.error('Guard config logu gönderilemedi.', err);
+    return false;
+  }
+}
+
+/** §19: liste görüntüleme kaydı (ihlâl DEĞİL). */
+async function sendListViewLog(guild, { viewer, count }) {
+  const ch = await getLogChannel(guild);
+  if (!ch) return false;
+  const u = userLabel(viewer);
+  const embed = baseEmbed(C().panel)
+    .setTitle('👁️ GUARD PANEL ACCESS')
+    .addFields(
+      { name: 'Kullanıcı', value: u.mention, inline: true },
+      { name: 'Kullanıcı ID', value: `\`${u.id}\``, inline: true },
+      { name: 'Komut', value: '/guardliste', inline: false },
+      { name: 'Sonuç', value: `${Number(count) || 0} Guard kullanıcısı listelendi.`, inline: false },
+      { name: 'Tarih', value: trDate(), inline: false },
+    );
+  try {
+    await ch.send({ embeds: [embed] });
+    return true;
+  } catch (err) {
+    logger.error('Guard panel-access logu gönderilemedi.', err);
+    return false;
+  }
+}
+
+module.exports = {
+  getLogChannel,
+  ensureLogChannel,
+  sendBanLog,
+  sendUnresolvedLog,
+  sendAllowedLog,
+  sendConfigLog,
+  sendListViewLog,
+  _channelCache: channelCache,
+};

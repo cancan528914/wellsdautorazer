@@ -38,11 +38,34 @@ const GUARD_ACTION = {
   MEMBER_BAN_ADD: { audit: AuditLogEvent.MemberBanAdd, category: 'MEMBER', label: 'Üye Banlama' },
   MEMBER_BAN_REMOVE: { audit: AuditLogEvent.MemberBanRemove, category: 'MEMBER', label: 'Ban Kaldırma' },
   MEMBER_KICK: { audit: AuditLogEvent.MemberKick, category: 'MEMBER', label: 'Üye Kickleme' },
+  MEMBER_TIMEOUT: { audit: AuditLogEvent.MemberUpdate, category: 'MEMBER', label: 'Üye Susturma (Timeout)' },
   WEBHOOK_CREATE: { audit: AuditLogEvent.WebhookCreate, category: 'WEBHOOK', label: 'Webhook Oluşturma' },
   WEBHOOK_UPDATE: { audit: AuditLogEvent.WebhookUpdate, category: 'WEBHOOK', label: 'Webhook Düzenleme' },
   WEBHOOK_DELETE: { audit: AuditLogEvent.WebhookDelete, category: 'WEBHOOK', label: 'Webhook Silme' },
+  EMOJI_CREATE: { audit: AuditLogEvent.EmojiCreate, category: 'GUILD', label: 'Emoji Oluşturma' },
+  EMOJI_UPDATE: { audit: AuditLogEvent.EmojiUpdate, category: 'GUILD', label: 'Emoji Düzenleme' },
+  EMOJI_DELETE: { audit: AuditLogEvent.EmojiDelete, category: 'GUILD', label: 'Emoji Silme' },
+  STICKER_CREATE: { audit: AuditLogEvent.StickerCreate, category: 'GUILD', label: 'Sticker Oluşturma' },
+  STICKER_UPDATE: { audit: AuditLogEvent.StickerUpdate, category: 'GUILD', label: 'Sticker Düzenleme' },
+  STICKER_DELETE: { audit: AuditLogEvent.StickerDelete, category: 'GUILD', label: 'Sticker Silme' },
+  THREAD_CREATE: { audit: AuditLogEvent.ThreadCreate, category: 'GUILD', label: 'Konu (Thread) Oluşturma' },
+  THREAD_DELETE: { audit: AuditLogEvent.ThreadDelete, category: 'GUILD', label: 'Konu (Thread) Silme' },
   GUILD_UPDATE: { audit: AuditLogEvent.GuildUpdate, category: 'GUILD', label: 'Sunucu Ayarı Değişikliği' },
 };
+
+// Seviye -> izinli aksiyon setleri (açık registry; numeric karşılaştırma yok)
+const ROLE_ACTIONS = new Set(['ROLE_CREATE', 'ROLE_DELETE', 'ROLE_UPDATE', 'MEMBER_ROLE_UPDATE']);
+const CHANNEL_ACTIONS = new Set([
+  'CHANNEL_CREATE',
+  'CHANNEL_DELETE',
+  'CHANNEL_UPDATE',
+  'CHANNEL_OVERWRITE_CREATE',
+  'CHANNEL_OVERWRITE_UPDATE',
+  'CHANNEL_OVERWRITE_DELETE',
+]);
+const BANKICK_ACTIONS = new Set(['MEMBER_BAN_ADD', 'MEMBER_BAN_REMOVE', 'MEMBER_KICK', 'MEMBER_TIMEOUT']);
+// FULL_TRUST: GUARD_ACTION içindeki TÜM aksiyonlar (yeni eklenen dahil otomatik)
+const FULL_TRUST_ACTIONS = new Set(Object.keys(GUARD_ACTION));
 
 const AUDIT_RETRY_ATTEMPTS = 3;
 const AUDIT_RETRY_DELAY_MS = 700;
@@ -54,6 +77,10 @@ const AUDIT_CACHE_TTL_MS = 5000;
 const LOGCHANNEL_CACHE_TTL_MS = 60000;
 const TRACK_TTL_MS = 25000;
 const WEBHOOK_RECENT_MS = 90000;
+// Aynı saldırının tekrar cezalandırılmaması için dedupe penceresi
+const DEDUPE_TTL_MS = 30000;
+// Devam eden ban varken ikinci ban denemesini engelleyen kilit süresi
+const PUNISH_TTL_MS = 60000;
 
 // /guardsetup + startup permission raporu
 const REQUIRED_PERMS = [
@@ -64,6 +91,11 @@ const REQUIRED_PERMS = [
   { flag: PermissionFlagsBits.ManageChannels, label: 'Kanalları Yönet' },
   { flag: PermissionFlagsBits.ManageGuild, label: 'Sunucuyu Yönet' },
   { flag: PermissionFlagsBits.ManageWebhooks, label: 'Webhookları Yönet' },
+  { flag: PermissionFlagsBits.ManageEvents, label: 'Etkinlikleri Yönet' },
+  { flag: PermissionFlagsBits.ManageThreads, label: 'Konuları Yönet' },
+  { flag: PermissionFlagsBits.ViewChannel, label: 'Kanalları Görüntüle' },
+  { flag: PermissionFlagsBits.SendMessages, label: 'Mesaj Gönder' },
+  { flag: PermissionFlagsBits.EmbedLinks, label: 'Bağlantı Yerleştir (Embed)' },
 ];
 
 module.exports = {
@@ -72,6 +104,12 @@ module.exports = {
   GUARD_CATEGORY,
   CATEGORY_LABEL,
   GUARD_ACTION,
+  ROLE_ACTIONS,
+  CHANNEL_ACTIONS,
+  BANKICK_ACTIONS,
+  FULL_TRUST_ACTIONS,
+  DEDUPE_TTL_MS,
+  PUNISH_TTL_MS,
   AUDIT_RETRY_ATTEMPTS,
   AUDIT_RETRY_DELAY_MS,
   AUDIT_MATCH_WINDOW_MS,

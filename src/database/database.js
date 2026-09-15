@@ -69,6 +69,16 @@ function getDb() {
   return db;
 }
 
+/** Database canlı mı? Asla throw etmez (fail-closed kararları için). */
+function dbHealthy() {
+  try {
+    getDb().prepare('SELECT 1').get();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ---------- System kayıtları ----------
 
 function upsertSystem({ messageId, channelId, guildId, type, createdBy }) {
@@ -247,6 +257,7 @@ module.exports = {
   getGuardSettings,
   saveGuardSettings,
   countGuardGuilds,
+  dbHealthy,
 };
 
 // ---------- Ticket kayıtları ----------

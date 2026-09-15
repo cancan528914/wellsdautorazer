@@ -5,6 +5,43 @@
  */
 const { AuditLogEvent } = require('discord.js');
 const { markBotAction } = require('./tracker');
+const { PUNISH_TTL_MS } = require('./constants');
+
+// Devam eden banlar: `${guildId}:${userId}` -> expiry. Aynı kullanıcıya
+// eşzamanlı ikinci ban denemesi engellenir (duplicate punishment yok).
+const punishing = new Map();
+
+function sweepPunishing(now = Date.now()) {
+  try {
+    for (const [k, exp] of punishing) {
+      if (exp <= now) punishing.delete(k);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Ban zaten sürüyorsa false döner (çağıran atlamalı). */
+function beginPunish(guildId, userId) {
+  try {
+    sweepPunishing();
+    const key = `${guildId}:${userId}`;
+    const exp = punishing.get(key);
+    if (exp && exp > Date.now()) return false;
+    punishing.set(key, Date.now() + PUNISH_TTL_MS);
+    return true;
+  } catch {
+    return true; // kilit hatası banı engellemesin
+  }
+}
+
+function endPunish(guildId, userId) {
+  try {
+    punishing.delete(`${guildId}:${userId}`);
+  } catch {
+    /* ignore */
+  }
+}
 
 /**
  * @returns {Promise<{ ok: boolean, detail: string }>}
@@ -26,4 +63,4 @@ async function punishExecutor(guild, executorId, reason) {
   }
 }
 
-module.exports = { punishExecutor };
+module.exports = { punishExecutor, beginPunish, endPunish, _punishing: punishing };

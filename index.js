@@ -115,6 +115,14 @@ async function main() {
   client.on('guildMemberRemove', (m) => guardEvents.onGuildMemberRemove(client, m));
   client.on('webhooksUpdate', (c) => guardEvents.onWebhookUpdate(client, c));
   client.on('guildUpdate', (o, n) => guardEvents.onGuildUpdate(client, o, n));
+  client.on('emojiCreate', (e) => guardEvents.onEmojiCreate(client, e));
+  client.on('emojiDelete', (e) => guardEvents.onEmojiDelete(client, e));
+  client.on('emojiUpdate', (o, n) => guardEvents.onEmojiUpdate(client, o, n));
+  client.on('stickerCreate', (s) => guardEvents.onStickerCreate(client, s));
+  client.on('stickerDelete', (s) => guardEvents.onStickerDelete(client, s));
+  client.on('stickerUpdate', (o, n) => guardEvents.onStickerUpdate(client, o, n));
+  client.on('threadCreate', (t) => guardEvents.onThreadCreate(client, t));
+  client.on('threadDelete', (t) => guardEvents.onThreadDelete(client, t));
 
   client.on('error', (err) => logger.error('Discord client error.', err));
   client.on('warn', (msg) => logger.warn(`Discord warning: ${msg}`));

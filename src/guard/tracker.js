@@ -4,7 +4,7 @@
  */
 const { TRACK_TTL_MS } = require('./constants');
 
-const recent = new Map(); // `${guildId}:${auditType}:${targetId}` -> expiry timestamp
+const recent = new Map(); // `${guildId}:${auditType}:${targetId}` -> { exp, reason }
 
 function keyOf(guildId, auditType, targetId) {
   return `${guildId}:${auditType}:${targetId}`;
@@ -12,20 +12,20 @@ function keyOf(guildId, auditType, targetId) {
 
 function sweep() {
   const now = Date.now();
-  for (const [k, exp] of recent) {
-    if (exp <= now) recent.delete(k);
+  for (const [k, v] of recent) {
+    if (!v || v.exp <= now) recent.delete(k);
   }
   if (recent.size > 500) {
     // taşmaya karşı en eskileri buda
-    const sorted = [...recent.entries()].sort((a, b) => a[1] - b[1]);
+    const sorted = [...recent.entries()].sort((a, b) => a[1].exp - b[1].exp);
     for (const [k] of sorted.slice(0, recent.size - 500)) recent.delete(k);
   }
 }
 
-function markBotAction(guildId, auditType, targetId) {
+function markBotAction(guildId, auditType, targetId, reason = '') {
   try {
-    recent.set(keyOf(guildId, auditType, targetId), Date.now() + TRACK_TTL_MS);
-    if (recent.size % 50 === 0) sweep();
+    recent.set(keyOf(guildId, auditType, targetId), { exp: Date.now() + TRACK_TTL_MS, reason: String(reason || '') });
+    if (recent.size % 50 === 0 || recent.size > 500) sweep();
   } catch {
     /* takip kritik değil */
   }
@@ -33,9 +33,9 @@ function markBotAction(guildId, auditType, targetId) {
 
 function isBotAction(guildId, auditType, targetId) {
   try {
-    const exp = recent.get(keyOf(guildId, auditType, targetId));
-    if (!exp) return false;
-    if (exp <= Date.now()) {
+    const rec = recent.get(keyOf(guildId, auditType, targetId));
+    if (!rec) return false;
+    if (rec.exp <= Date.now()) {
       recent.delete(keyOf(guildId, auditType, targetId));
       return false;
     }

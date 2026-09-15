@@ -176,6 +176,29 @@ async function rollbackBan(guild, userId) {
   }
 }
 
+/**
+ * Timeout rollback: uygulanmışsa kaldırır, kaldırılmışsa eski süreyi geri yazar.
+ * prev: { applied: boolean, untilMs: number|null }
+ */
+async function rollbackTimeout(guild, member, prev) {
+  try {
+    const target = (await guild.members.fetch(member.id).catch(() => null)) || member;
+    if (prev?.applied) {
+      await target.timeout(null, 'WELLSD GUARD rollback: yetkisiz susturma');
+      markBotAction(guild.id, AuditLogEvent.MemberUpdate, target.id);
+      return ok('Yetkisiz susturma kaldırıldı.');
+    }
+    if (prev?.untilMs && prev.untilMs > Date.now()) {
+      await target.timeout(prev.untilMs - Date.now(), 'WELLSD GUARD rollback: susturma geri yüklendi');
+      markBotAction(guild.id, AuditLogEvent.MemberUpdate, target.id);
+      return ok('Kaldırılan susturma geri yüklendi.');
+    }
+    return fail('Geri yüklenecek susturma bilgisi yok (manuel inceleme).');
+  } catch (err) {
+    return fail(`Susturma geri alınamadı: ${err.code || err.message}`);
+  }
+}
+
 async function rollbackWebhook(guild, channel) {
   try {
     const hooks = await channel.fetchWebhooks();
@@ -220,6 +243,7 @@ module.exports = {
   rollbackChannelDelete,
   rollbackChannelUpdate,
   rollbackBan,
+  rollbackTimeout,
   rollbackWebhook,
   rollbackGuild,
 };

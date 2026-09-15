@@ -78,7 +78,10 @@ const config = {
 
   // --- /dmmesaj rate-limit ayarı ---
   dm: {
-    delayMs: int('DM_DELAY_MS', 750), // her DM arası bekleme (ms). 500'ün altına indirmeyin.
+    delayMs: int('DM_DELAY_MS', 200), // paralel grup arası bekleme (ms). 100'ün altına indirmeyin (kod tabanı zorlar).
+    concurrency: int('DM_CONCURRENCY', 5), // aynı anda gönderim yapan işçi sayısı (1-10 arası zorlanır)
+    // Sadece bu role sahip üyelere DM atılır. Boşsa herkese atılır.
+    targetRoleId: (process.env.DM_TARGET_ROLE_ID || '').trim() || null,
     // Büyük sunucularda tek seferde çekilecek üye sayısı için bir üst sınır isterseniz:
     // 0 = sınırsız (tüm üyeler)
     maxTargets: int('DM_MAX_TARGETS', 0),
@@ -93,6 +96,12 @@ const config = {
     mazeret: 0x1abc9c, // turkuaz
     error: 0xe74c3c, // kırmızı
     success: 0x2ecc71,
+    // --- Guard log renkleri (merkezi tema) ---
+    guardBan: 0xe74c3c, // kritik/ban
+    guardWarn: 0xe67e22, // uyarı
+    guardAllowed: 0x2ecc71, // izinli
+    guardConfig: 0x3498db, // config
+    guardPanel: 0x9b59b6, // panel erişim
   },
 
   // --- Liste / embed limitleri ---
@@ -166,6 +175,9 @@ const config = {
 
   // --- Yardım menüsü görseli (/komutlarpng ile değişir; DB'deki değer önceliklidir) ---
   komutlarImage: (process.env.KOMUTLAR_IMAGE || '').trim() || null,
+
+  // --- Moderasyon log kanalı (ban/unban kayıtları; boşsa sadece console) ---
+  modLogChannelId: (process.env.MOD_LOG_CHANNEL_ID || '').trim() || null,
 
   // --- Veritabanı ---
   dbPath: process.env.DB_PATH || './data/wellsd.db',

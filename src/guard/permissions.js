@@ -8,6 +8,7 @@ const { isAdmin } = require('../utils/permissions');
 const { hasAnyRole } = require('../utils/permissions');
 const config = require('../config');
 const { getGuardLevel } = require('../database/database');
+const { GUARD_ACTION, ROLE_ACTIONS, CHANNEL_ACTIONS, BANKICK_ACTIONS, FULL_TRUST_ACTIONS } = require('./constants');
 
 function levelOf(guildId, userId) {
   try {
@@ -23,6 +24,23 @@ function isAllowed(level, category) {
   if (level === 2) return category === 'CHANNEL';
   if (level === 3) return category === 'MEMBER';
   return false;
+}
+
+/** Seviyenin BU aksiyona açık izni var mı? (registry authoritative kaynaktır) */
+function levelActions(level) {
+  if (level === 4) return FULL_TRUST_ACTIONS;
+  if (level === 1) return ROLE_ACTIONS;
+  if (level === 2) return CHANNEL_ACTIONS;
+  if (level === 3) return BANKICK_ACTIONS;
+  return new Set();
+}
+
+function isActionAllowed(level, action) {
+  try {
+    return levelActions(level).has(action);
+  } catch {
+    return false;
+  }
 }
 
 /** Guard yönetim komutlarını kullanabilir mi? (yalnızca admin VEYA guard-yönetici rolü) */
@@ -50,4 +68,4 @@ function guardCoverNote(guildId, userId) {
   }
 }
 
-module.exports = { levelOf, isAllowed, canManageGuard, guardCoverNote };
+module.exports = { levelOf, isAllowed, levelActions, isActionAllowed, canManageGuard, guardCoverNote };

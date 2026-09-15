@@ -15,9 +15,55 @@ const {
   rollbackChannelDelete,
   rollbackChannelUpdate,
   rollbackBan,
+  rollbackTimeout,
   rollbackWebhook,
   rollbackGuild,
 } = require('./rollback');
+const { getGuardSettings } = require('../database/database');
+
+/** Botun kritik rollerinden biri mi hedefte? (guard-yönetici rolleri + botun en üst rolü) */
+function isSensitiveTarget(guild, roleIds) {
+  try {
+    const ids = new Set((roleIds || []).map(String));
+    if (!ids.size || !guild) return false;
+    const cfg = require('../config');
+    for (const id of cfg.guardManagerRoleIds || []) {
+      if (ids.has(String(id))) return true;
+    }
+    const top = guild.members?.me?.roles?.highest;
+    if (top && ids.has(String(top.id))) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/** Kanal guard log kanalı mı? (silinirse auto-heal, bozulursa izin onarımı) */
+function isLogChannel(guild, channelId) {
+  try {
+    if (!guild || !channelId) return false;
+    const settings = getGuardSettings(guild.id);
+    return !!settings?.log_channel_id && String(settings.log_channel_id) === String(channelId);
+  } catch {
+    return false;
+  }
+}
+
+async function fixLogChannelPerms(guild, channel) {
+  try {
+    const me = guild.members?.me;
+    if (!me) return;
+    await channel.permissionOverwrites
+      .set([
+        { id: guild.roles.everyone.id, deny: ['ViewChannel'] },
+        { id: me.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory', 'EmbedLinks'] },
+      ])
+      .catch(() => null);
+    logger.warn(`Guard log kanalı izinleri onarıldı: #${channel.name || channel.id}`);
+  } catch {
+    /* best effort */
+  }
+}
 
 const GUILD_CHANNEL_TYPES = new Set([
   ChannelType.GuildText,
@@ -68,6 +114,7 @@ async function onRoleDelete(client, role) {
       action: 'ROLE_DELETE',
       targetId: role.id,
       targetDesc: `Rol: ${role.name || role.id}`,
+      sensitive: isSensitiveTarget(role.guild, [role.id]),
       doRollback: () => rollbackRoleDelete(role.guild, snap),
     });
   } catch (err) {
@@ -91,6 +138,7 @@ async function onRoleUpdate(client, oldRole, newRole) {
       action: 'ROLE_UPDATE',
       targetId: newRole.id,
       targetDesc: `Rol: ${newRole.name || newRole.id}`,
+      sensitive: isSensitiveTarget(newRole.guild, [newRole.id]),
       doRollback: () => rollbackRoleUpdate(newRole.guild, snap, newRole),
     });
   } catch (err) {
@@ -111,13 +159,34 @@ async function onGuildMemberUpdate(client, oldMember, newMember) {
     if (!newMember?.guild) return;
     const before = roleIds(oldMember?.roles?.cache);
     const after = roleIds(newMember?.roles?.cache);
-    if (before.size === after.size && [...before].every((id) => after.has(id))) return; // rol değişimi yok
+    const rolesChanged = !(before.size === after.size && [...before].every((id) => after.has(id)));
+    // Timeout değişimi (MemberUpdate audit'i; rollerden bağımsız da tetiklenebilir)
+    const oldTs = oldMember?.communicationDisabledUntilTimestamp || 0;
+    const newTs = newMember?.communicationDisabledUntilTimestamp || 0;
+    const now = Date.now();
+    const timeoutApplied = newTs > now && oldTs !== newTs;
+    const timeoutLifted = !newTs && oldTs > now;
+    if (!rolesChanged && !timeoutApplied && !timeoutLifted) return;
+    if (timeoutApplied || timeoutLifted) {
+      await handleGuardEvent({
+        client,
+        guild: newMember.guild,
+        action: 'MEMBER_TIMEOUT',
+        targetId: newMember.id,
+        targetDesc: `Üye: ${newMember.user?.tag || newMember.id} (${timeoutApplied ? 'susturma' : 'susturma kaldırma'})`,
+        doRollback: () => rollbackTimeout(newMember.guild, newMember, { applied: timeoutApplied, untilMs: timeoutApplied ? newTs : oldTs }),
+      });
+      if (!rolesChanged) return;
+    }
+    if (!rolesChanged) return;
+    const changedIds = [...after].filter((id) => !before.has(id)).concat([...before].filter((id) => !after.has(id)));
     await handleGuardEvent({
       client,
       guild: newMember.guild,
       action: 'MEMBER_ROLE_UPDATE',
       targetId: newMember.id,
       targetDesc: `Üye: ${newMember.user?.tag || newMember.id}`,
+      sensitive: isSensitiveTarget(newMember.guild, changedIds),
       doRollback: (ctx) => rollbackMemberRoles(newMember.guild, newMember, ctx?.entry),
     });
   } catch (err) {
@@ -172,6 +241,10 @@ async function onChannelDelete(client, channel) {
 async function onChannelUpdate(client, oldChannel, newChannel) {
   try {
     if (!newChannel?.guild || !GUILD_CHANNEL_TYPES.has(newChannel.type)) return;
+    // Log kanalı bozulduysa izinleri onar (normal Guard akışı aynen devam eder)
+    if (isLogChannel(newChannel.guild, newChannel.id)) {
+      await fixLogChannelPerms(newChannel.guild, newChannel);
+    }
     // Önce düz kanal düzenlemesi dene; overwrite değişimleri ayrı audit tipindedir
     const probes = [
       AuditLogEvent.ChannelUpdate,
@@ -332,6 +405,149 @@ async function onGuildUpdate(client, oldGuild, newGuild) {
   }
 }
 
+// ---------- Emoji / Sticker / Thread (GUILD kategorisi: yalnızca URL Guard muaf) ----------
+// Rollback mümkün değildir (görsel/veri geri yüklenemez) → tespit + ceza + açık log.
+
+async function onEmojiCreate(client, emoji) {
+  try {
+    if (!emoji?.guild) return;
+    await handleGuardEvent({
+      client,
+      guild: emoji.guild,
+      action: 'EMOJI_CREATE',
+      targetId: emoji.id,
+      targetDesc: `Emoji: ${emoji.name || emoji.id}`,
+      doRollback: () => Promise.resolve({ ok: false, detail: 'Emoji geri yüklenemez (manuel inceleme).' }),
+    });
+  } catch (err) {
+    logger.error('Guard onEmojiCreate failed.', err);
+  }
+}
+
+async function onEmojiUpdate(client, oldEmoji, newEmoji) {
+  try {
+    if (!newEmoji?.guild) return;
+    await handleGuardEvent({
+      client,
+      guild: newEmoji.guild,
+      action: 'EMOJI_UPDATE',
+      targetId: newEmoji.id,
+      targetDesc: `Emoji: ${newEmoji.name || newEmoji.id}`,
+      doRollback: () => Promise.resolve({ ok: false, detail: 'Emoji eski haline döndürülemez (manuel inceleme).' }),
+    });
+  } catch (err) {
+    logger.error('Guard onEmojiUpdate failed.', err);
+  }
+}
+
+async function onEmojiDelete(client, emoji) {
+  try {
+    if (!emoji?.guild) return;
+    await handleGuardEvent({
+      client,
+      guild: emoji.guild,
+      action: 'EMOJI_DELETE',
+      targetId: emoji.id,
+      targetDesc: `Emoji: ${emoji.name || emoji.id}`,
+      doRollback: () => Promise.resolve({ ok: false, detail: 'Silinen emoji geri yüklenemez (manuel inceleme).' }),
+    });
+  } catch (err) {
+    logger.error('Guard onEmojiDelete failed.', err);
+  }
+}
+
+function stickerGuild(client, sticker) {
+  try {
+    const gid = sticker?.guildId || sticker?.guild?.id;
+    return (gid && client?.guilds?.cache?.get(gid)) || null;
+  } catch {
+    return null;
+  }
+}
+
+async function onStickerCreate(client, sticker) {
+  try {
+    const guild = stickerGuild(client, sticker);
+    if (!guild || !sticker?.id) return;
+    await handleGuardEvent({
+      client,
+      guild,
+      action: 'STICKER_CREATE',
+      targetId: sticker.id,
+      targetDesc: `Sticker: ${sticker.name || sticker.id}`,
+      doRollback: () => Promise.resolve({ ok: false, detail: 'Sticker geri yüklenemez (manuel inceleme).' }),
+    });
+  } catch (err) {
+    logger.error('Guard onStickerCreate failed.', err);
+  }
+}
+
+async function onStickerUpdate(client, oldSticker, newSticker) {
+  try {
+    const guild = stickerGuild(client, newSticker);
+    if (!guild || !newSticker?.id) return;
+    await handleGuardEvent({
+      client,
+      guild,
+      action: 'STICKER_UPDATE',
+      targetId: newSticker.id,
+      targetDesc: `Sticker: ${newSticker.name || newSticker.id}`,
+      doRollback: () => Promise.resolve({ ok: false, detail: 'Sticker eski haline döndürülemez (manuel inceleme).' }),
+    });
+  } catch (err) {
+    logger.error('Guard onStickerUpdate failed.', err);
+  }
+}
+
+async function onStickerDelete(client, sticker) {
+  try {
+    const guild = stickerGuild(client, sticker);
+    if (!guild || !sticker?.id) return;
+    await handleGuardEvent({
+      client,
+      guild,
+      action: 'STICKER_DELETE',
+      targetId: sticker.id,
+      targetDesc: `Sticker: ${sticker.name || sticker.id}`,
+      doRollback: () => Promise.resolve({ ok: false, detail: 'Silinen sticker geri yüklenemez (manuel inceleme).' }),
+    });
+  } catch (err) {
+    logger.error('Guard onStickerDelete failed.', err);
+  }
+}
+
+async function onThreadCreate(client, thread) {
+  try {
+    if (!thread?.guild) return;
+    await handleGuardEvent({
+      client,
+      guild: thread.guild,
+      action: 'THREAD_CREATE',
+      targetId: thread.id,
+      targetDesc: `Konu: ${thread.name || thread.id}`,
+      doRollback: () => Promise.resolve({ ok: false, detail: 'Thread silinmesi riskli olabilir (manuel inceleme).' }),
+    });
+  } catch (err) {
+    logger.error('Guard onThreadCreate failed.', err);
+  }
+}
+
+async function onThreadDelete(client, thread) {
+  try {
+    if (!thread?.guild) return;
+    await handleGuardEvent({
+      client,
+      guild: thread.guild,
+      action: 'THREAD_DELETE',
+      targetId: thread.id,
+      targetDesc: `Konu: ${thread.name || thread.id}`,
+      doRollback: () => Promise.resolve({ ok: false, detail: 'Silinen thread geri yüklenemez (manuel inceleme).' }),
+    });
+  } catch (err) {
+    logger.error('Guard onThreadDelete failed.', err);
+  }
+}
+
 module.exports = {
   onRoleCreate,
   onRoleDelete,
@@ -345,4 +561,12 @@ module.exports = {
   onGuildMemberRemove,
   onWebhookUpdate,
   onGuildUpdate,
+  onEmojiCreate,
+  onEmojiUpdate,
+  onEmojiDelete,
+  onStickerCreate,
+  onStickerUpdate,
+  onStickerDelete,
+  onThreadCreate,
+  onThreadDelete,
 };
