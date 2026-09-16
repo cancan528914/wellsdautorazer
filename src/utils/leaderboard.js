@@ -1,15 +1,18 @@
 /**
- * Ticket leaderboard PNG üretici (sharp + SVG, derlemesiz).
+ * Ticket leaderboard PNG üretici (@napi-rs/canvas + repoya gömülü Inter fontu).
+ * NEDEN: sunucu imajlarında sistem fontu olmayabiliyor (SVG metni tofu olur).
+ * Gömülü TTF her ortamda birebir aynı render verir — sistem fontuna bağımlılık YOK.
  * - Her çağrıda güncel DB verisiyle dinamik render.
- * - Emoji glifi YOK (Linux sunucularda tofu olur) → rozetler şekil+numara ile çizilir.
- * - Avatar/geçici dosya yok: buffer üzerinden composite, veriAvatar yoksa baş harf rozeti.
- * - Avatar cache: URL anahtarlı (avatar değişince URL değişir), 10dk TTL, max 50.
+ * - Emoji glifi YOK (rozetler şekil+numara).
+ * - Avatar yoksa/yüklenemezse baş harf rozeti; buffer üzerinden gönderim (temp dosya yok).
+ * - Avatar cache: URL anahtarlı, 10dk TTL, max 50.
  */
-const sharp = require('sharp');
+const path = require('path');
+const { createCanvas, loadImage, GlobalFonts } = require('@napi-rs/canvas');
 const logger = require('./logger');
 
 const W = 900;
-const FONT = 'Segoe UI, Arial, Helvetica, sans-serif';
+const FAMILY = 'Inter, Arial, sans-serif';
 const C = {
   bg: '#232428',
   card: '#2b2d31',
@@ -21,7 +24,6 @@ const C = {
   rankBg: '#4e5058',
   white: '#ffffff',
   muted: '#b5bac1',
-  dark: '#1a1b1e',
 };
 const MEDALS = [
   { bg: C.gold, fg: C.goldDark },
@@ -34,9 +36,21 @@ const AVATAR_TIMEOUT_MS = 3500;
 const AVATAR_MAX_BYTES = 3 * 1024 * 1024;
 
 const avatarCache = new Map(); // url -> { ts, buf }
+let fontsRegistered = false;
 
-function escapeXml(s) {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function registerFonts() {
+  if (fontsRegistered) return true;
+  try {
+    const dir = path.join(__dirname, '..', '..', 'assets', 'fonts');
+    GlobalFonts.registerFromPath(path.join(dir, 'Inter-Regular.ttf'), 'Inter');
+    GlobalFonts.registerFromPath(path.join(dir, 'Inter-Bold.ttf'), 'Inter');
+    GlobalFonts.registerFromPath(path.join(dir, 'Inter-ExtraBold.ttf'), 'Inter');
+    fontsRegistered = true;
+    return true;
+  } catch (err) {
+    logger.warn(`Gömülü font kaydı başarısız (sistem fontuna düşülür): ${err.message}`);
+    return false;
+  }
 }
 
 function cleanName(name, max = 18) {
@@ -57,6 +71,13 @@ function countText(n) {
 function rowCountText(n) {
   const c = Math.max(0, Number(n) || 0);
   return c === 1 ? '1 Ticket' : `${c} Tickets`;
+}
+
+function paletteFor(userId) {
+  const PALETTE = ['#5865F2', '#9b59b6', '#1abc9c', '#e67e22', '#e91e63', '#0099ff', '#ff6b6b', '#2ecc71', '#f1c40f', '#00bcd4'];
+  let h = 0;
+  for (const ch of String(userId)) h = (h * 31 + ch.charCodeAt(0)) % 997;
+  return PALETTE[h % PALETTE.length];
 }
 
 function pruneAvatarCache() {
@@ -101,52 +122,92 @@ async function fetchAvatar(url) {
   }
 }
 
-/** Kare buffer'ı dairesel maskeyle kırpar (avatar/icon için). */
-async function circleImage(buf, size) {
-  const resized = await sharp(buf).resize(size, size, { fit: 'cover' }).png().toBuffer();
-  const mask = Buffer.from(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}"><circle cx="${size / 2}" cy="${size / 2}" r="${size / 2}" fill="white"/></svg>`,
-  );
-  return sharp(resized).composite([{ input: mask, blend: 'dest-in' }]).png().toBuffer();
+function rr(ctx, x, y, w, h, r) {
+  const rad = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rad, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rad);
+  ctx.arcTo(x + w, y + h, x, y + h, rad);
+  ctx.arcTo(x, y + h, x, y, rad);
+  ctx.arcTo(x, y, x + w, y, rad);
+  ctx.closePath();
 }
 
-const PALETTE = ['#5865F2', '#9b59b6', '#1abc9c', '#e67e22', '#e91e63', '#0099ff', '#ff6b6b', '#2ecc71', '#f1c40f', '#00bcd4'];
+function circle(ctx, cx, cy, r, fill) {
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = fill;
+  ctx.fill();
+}
 
-function paletteFor(userId) {
-  let h = 0;
-  for (const ch of String(userId)) h = (h * 31 + ch.charCodeAt(0)) % 997;
-  return PALETTE[h % PALETTE.length];
+function centerText(ctx, text, x, y, font, fill) {
+  ctx.font = font;
+  ctx.fillStyle = fill;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x, y);
+}
+
+/** Buffer görseli dairesel kırpıp çizer (avatar/icon). Hata verirse false döner. */
+async function drawAvatar(ctx, buf, cx, cy, d) {
+  try {
+    const img = await loadImage(buf);
+    const side = Math.min(img.width, img.height) || 1;
+    const sx = (img.width - side) / 2;
+    const sy = (img.height - side) / 2;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, d / 2, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.drawImage(img, sx, sy, side, side, cx - d / 2, cy - d / 2, d, d);
+    ctx.restore();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
  * rows: [{ userId, name, avatarBuffer|null, count }] (sıralı, max 10)
- * SVG'yi string olarak kurar (test edilebilir), renderTopImage PNG'ye çevirir.
+ * @returns {Promise<Buffer>} PNG
  */
-function buildTopSvg({ guildName = '', iconUri = null, rows = [] }) {
+async function renderTopImage({ guildName = '', iconBuffer = null, rows = [] }) {
+  registerFonts();
   const list = (rows || []).filter((r) => r).slice(0, 10);
   const top3 = list.slice(0, 3);
   const rest = list.slice(3);
   const pad = 28;
-  const headerH = iconUri ? 118 : 104;
+  const headerH = 118;
   const topH = top3.length ? 258 : 0;
   const rowH = 64;
   const footerH = 46;
-  const H = pad + headerH + (top3.length ? 16 + topH + 14 : 8) + rest.length * (rowH + 8) + footerH + pad;
+  const H = Math.round(pad + headerH + (top3.length ? 16 + topH + 14 : 8) + rest.length * (rowH + 8) + footerH + pad);
 
-  const parts = [];
-  parts.push(`<rect x="0" y="0" width="${W}" height="${H}" rx="24" fill="${C.bg}"/>`);
-  parts.push(`<rect x="0" y="0" width="${W}" height="6" fill="${C.gold}"/>`);
+  const canvas = createCanvas(W, H);
+  const ctx = canvas.getContext('2d');
+
+  // zemin + üst altın şerit
+  rr(ctx, 0, 0, W, H, 24);
+  ctx.fillStyle = C.bg;
+  ctx.fill();
+  ctx.fillStyle = C.gold;
+  ctx.fillRect(0, 0, W, 6);
 
   // header
   let hx = pad + 8;
-  if (iconUri) {
-    parts.push(`<image href="${iconUri}" x="${hx}" y="${pad + 14}" width="64" height="64"/>`);
-    hx += 80;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  let iconDrawn = false;
+  if (iconBuffer) {
+    iconDrawn = await drawAvatar(ctx, iconBuffer, hx + 32, pad + 14 + 32, 64);
   }
-  parts.push(
-    `<text x="${hx}" y="${pad + 52}" font-family="${FONT}" font-size="38" font-weight="800" fill="${C.white}">TICKET TOP 10</text>`,
-    `<text x="${hx}" y="${pad + 80}" font-family="${FONT}" font-size="17" fill="${C.muted}">En çok ticket sahiplenen yetkililer${guildName ? ` • ${escapeXml(guildName)}` : ''}</text>`,
-  );
+  if (iconDrawn) hx += 80;
+  ctx.fillStyle = C.white;
+  ctx.font = `800 38px ${FAMILY}`;
+  ctx.fillText('TICKET TOP 10', hx, pad + 46);
+  ctx.fillStyle = C.muted;
+  ctx.font = `400 17px ${FAMILY}`;
+  ctx.fillText(`En çok ticket sahiplenen yetkililer${guildName ? ` • ${guildName}` : ''}`.slice(0, 90), hx, pad + 74);
   let y = pad + headerH;
 
   // ilk 3: büyük kartlar
@@ -154,74 +215,69 @@ function buildTopSvg({ guildName = '', iconUri = null, rows = [] }) {
     y += 16;
     const gap = 16;
     const cw = Math.floor((W - pad * 2 - gap * (top3.length - 1)) / top3.length);
-    top3.forEach((r, i) => {
+    for (let i = 0; i < top3.length; i++) {
+      const r = top3[i];
       const x = pad + i * (cw + gap);
       const medal = MEDALS[i] || MEDALS[2];
-      parts.push(`<rect x="${x}" y="${y}" width="${cw}" height="242" rx="16" fill="${C.card}"/>`);
-      // rozet
-      parts.push(`<circle cx="${x + 34}" cy="${y + 34}" r="20" fill="${medal.bg}"/>`);
-      parts.push(
-        `<text x="${x + 34}" y="${y + 41}" font-family="${FONT}" font-size="20" font-weight="800" fill="${medal.fg}" text-anchor="middle">${i + 1}</text>`,
-      );
-      // avatar veya baş harf
+      rr(ctx, x, y, cw, 242, 16);
+      ctx.fillStyle = C.card;
+      ctx.fill();
+      circle(ctx, x + 34, y + 34, 20, medal.bg);
+      centerText(ctx, String(i + 1), x + 34, y + 35, `800 20px ${FAMILY}`, medal.fg);
       const ax = x + cw / 2;
       const ay = y + 118;
-      if (r.avatarUri) {
-        parts.push(`<image href="${r.avatarUri}" x="${Math.round(ax - 42)}" y="${Math.round(ay - 42)}" width="84" height="84"/>`);
-      } else {
-        parts.push(`<circle cx="${ax}" cy="${ay}" r="42" fill="${paletteFor(r.userId)}"/>`);
-        parts.push(
-          `<text x="${ax}" y="${ay + 15}" font-family="${FONT}" font-size="38" font-weight="800" fill="${C.white}" text-anchor="middle">${escapeXml(initialOf(r.name))}</text>`,
-        );
+      const drew = r.avatarBuffer ? await drawAvatar(ctx, r.avatarBuffer, ax, ay, 84) : false;
+      if (!drew) {
+        circle(ctx, ax, ay, 42, paletteFor(r.userId));
+        centerText(ctx, initialOf(r.name), ax, ay + 2, `800 38px ${FAMILY}`, C.white);
       }
-      // isim + sayı rozeti
-      parts.push(
-        `<text x="${ax}" y="${ay + 76}" font-family="${FONT}" font-size="21" font-weight="700" fill="${C.white}" text-anchor="middle">${escapeXml(cleanName(r.name, 16))}</text>`,
-      );
+      centerText(ctx, cleanName(r.name, 16), ax, ay + 76, `700 21px ${FAMILY}`, C.white);
       const label = countText(r.count);
-      const pw = 34 + label.length * 11;
-      parts.push(`<rect x="${Math.round(ax - pw / 2)}" y="${ay + 88}" width="${pw}" height="32" rx="16" fill="${medal.bg}"/>`);
-      parts.push(
-        `<text x="${ax}" y="${ay + 110}" font-family="${FONT}" font-size="16" font-weight="800" fill="${medal.fg}" text-anchor="middle">${label}</text>`,
-      );
-    });
+      ctx.font = `800 16px ${FAMILY}`;
+      const pw = 34 + ctx.measureText(label).width;
+      const px = Math.round(ax - pw / 2);
+      const py = ay + 88;
+      rr(ctx, px, py, pw, 32, 16);
+      ctx.fillStyle = medal.bg;
+      ctx.fill();
+      centerText(ctx, label, ax, py + 17, `800 16px ${FAMILY}`, medal.fg);
+    }
     y += 242 + 14;
   } else {
     y += 8;
   }
 
   // 4-10: kompakt satırlar
-  rest.forEach((r, k) => {
+  for (let k = 0; k < rest.length; k++) {
+    const r = rest[k];
     const i = k + 3;
-    parts.push(`<rect x="${pad}" y="${y}" width="${W - pad * 2}" height="${rowH}" rx="12" fill="${i % 2 ? C.card : C.rowAlt}"/>`);
-    parts.push(`<circle cx="${pad + 34}" cy="${y + rowH / 2}" r="16" fill="${C.rankBg}"/>`);
-    parts.push(
-      `<text x="${pad + 34}" y="${y + rowH / 2 + 5}" font-family="${FONT}" font-size="14" font-weight="700" fill="#dbdee1" text-anchor="middle">${i + 1}</text>`,
-    );
-    if (r.avatarUri) {
-      parts.push(`<image href="${r.avatarUri}" x="${pad + 60}" y="${Math.round(y + (rowH - 40) / 2)}" width="40" height="40"/>`);
-    } else {
-      parts.push(`<circle cx="${pad + 80}" cy="${y + rowH / 2}" r="20" fill="${paletteFor(r.userId)}"/>`);
-      parts.push(
-          `<text x="${pad + 80}" y="${y + rowH / 2 + 7}" font-family="${FONT}" font-size="19" font-weight="800" fill="${C.white}" text-anchor="middle">${escapeXml(initialOf(r.name))}</text>`,
-      );
+    rr(ctx, pad, y, W - pad * 2, rowH, 12);
+    ctx.fillStyle = i % 2 ? C.card : C.rowAlt;
+    ctx.fill();
+    const cy = y + rowH / 2;
+    circle(ctx, pad + 34, cy, 16, C.rankBg);
+    centerText(ctx, String(i + 1), pad + 34, cy + 1, `700 14px ${FAMILY}`, '#dbdee1');
+    const drew = r.avatarBuffer ? await drawAvatar(ctx, r.avatarBuffer, pad + 80, cy, 40) : false;
+    if (!drew) {
+      circle(ctx, pad + 80, cy, 20, paletteFor(r.userId));
+      centerText(ctx, initialOf(r.name), pad + 80, cy + 1, `800 19px ${FAMILY}`, C.white);
     }
-    parts.push(
-      `<text x="${pad + 114}" y="${y + rowH / 2 + 7}" font-family="${FONT}" font-size="19" font-weight="600" fill="${C.white}">${escapeXml(cleanName(r.name, 20))}</text>`,
-    );
-    const label = rowCountText(r.count);
-    parts.push(
-      `<text x="${W - pad - 12}" y="${y + rowH / 2 + 7}" font-family="${FONT}" font-size="19" font-weight="800" fill="${C.gold}" text-anchor="end">${label}</text>`,
-    );
+    ctx.fillStyle = C.white;
+    ctx.font = `600 19px ${FAMILY}`;
+    ctx.textAlign = 'left';
+    ctx.fillText(cleanName(r.name, 20), pad + 114, cy + 1);
+    ctx.fillStyle = C.gold;
+    ctx.font = `800 19px ${FAMILY}`;
+    ctx.textAlign = 'right';
+    ctx.fillText(rowCountText(r.count), W - pad - 12, cy + 1);
+    ctx.textAlign = 'center';
     y += rowH + 8;
-  });
+  }
 
   // footer
-  parts.push(
-    `<text x="${W / 2}" y="${H - pad - 8}" font-family="${FONT}" font-size="14" fill="${C.muted}" text-anchor="middle">Ticket statistics • Güncel</text>`,
-  );
+  centerText(ctx, 'Ticket statistics • Güncel', W / 2, H - pad - 8, `400 14px ${FAMILY}`, C.muted);
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${parts.join('')}</svg>`;
+  return canvas.toBuffer('image/png');
 }
 
 /**
@@ -264,50 +320,16 @@ async function fetchTopData(guild, dbRows) {
   return Promise.all(jobs);
 }
 
-async function toDataUri(buf, size) {
-  try {
-    const circ = await circleImage(buf, size);
-    return `data:image/png;base64,${circ.toString('base64')}`;
-  } catch (err) {
-    logger.warn(`Avatar maskeleme başarısız: ${err.message}`);
-    return null;
-  }
-}
-
-/**
- * PNG üretir. Avatarlar dairesel maskelenip gömülür; yoksa baş harf rozeti.
- * @returns {Promise<Buffer>}
- */
-async function renderTopImage({ guildName = '', iconBuffer = null, rows = [] }) {
-  const list = (rows || []).filter((r) => r).slice(0, 10);
-  let iconUri = null;
-  if (iconBuffer) {
-    try {
-      const circ = await circleImage(iconBuffer, 64);
-      iconUri = `data:image/png;base64,${circ.toString('base64')}`;
-    } catch (err) {
-      logger.warn(`Sunucu ikonu işlenemedi: ${err.message}`);
-    }
-  }
-  const sized = await Promise.all(
-    list.map(async (r, i) => {
-      const size = i < 3 ? 84 : 40;
-      return { ...r, avatarUri: r.avatarBuffer ? await toDataUri(r.avatarBuffer, size) : null };
-    }),
-  );
-  const svg = buildTopSvg({ guildName, iconUri, rows: sized });
-  return sharp(Buffer.from(svg)).png().toBuffer();
-}
-
 module.exports = {
-  buildTopSvg,
   renderTopImage,
   fetchTopData,
   fetchAvatar,
-  circleImage,
+  drawAvatar,
   cleanName,
   initialOf,
   countText,
-  escapeXml,
+  rowCountText,
+  paletteFor,
+  registerFonts,
   _avatarCache: avatarCache,
 };
