@@ -183,6 +183,29 @@ const config = {
 
   // --- Veritabanı ---
   dbPath: process.env.DB_PATH || './data/wellsd.db',
+
+  // --- Web Transcript Server ---
+  web: {
+    enabled: (process.env.WEB_ENABLED || 'true').toLowerCase() !== 'false',
+    // Railway PORT env'ini de destekle (PaaS otomatik port)
+    port: (() => {
+      const p = int('WEB_PORT', 0);
+      if (p) return p;
+      const railway = int('PORT', 0);
+      return railway || 3000;
+    })(),
+    host: (process.env.WEB_HOST || '0.0.0.0').trim() || '0.0.0.0',
+    baseUrl: (() => {
+      const explicit = (process.env.WEB_URL || '').trim();
+      if (explicit) return explicit;
+      const railwayDomain = (process.env.RAILWAY_PUBLIC_DOMAIN || '').trim();
+      if (railwayDomain) return `https://${railwayDomain}`;
+      const railwayStatic = (process.env.RAILWAY_STATIC_URL || '').trim();
+      if (railwayStatic) return railwayStatic;
+      return null;
+    })(),
+    trustProxy: int('WEB_TRUST_PROXY', 1),
+  },
 };
 
 module.exports = config;

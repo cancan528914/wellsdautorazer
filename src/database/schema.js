@@ -2,12 +2,14 @@
  * SQLite şeması.
  * - Discord ID'leri TEXT (string) saklanır (JS number taşması olmaması için).
  * - systems: takip edilen her /ingame ve /aktiflik mesajı (message_id bazlı).
- * - participants: o mesaja bağlı kullanıcı durumları.
  *   - /ingame için status: 'joined' | 'left' (kullanıcı başına tek satır, UNIQUE garantisi)
  *   - /aktiflik için status her zaman 'joined'
  * - tickets: açılan her ticket (channel_id üzerinden takip, restart-safe).
  * - settings: key-value kalıcı ayarlar (örn. ticket panel görseli).
  * - ticket_panels: her sunucudaki aktif ticket panel mesajı (/ticketpng güncelleyebilsin diye).
+ * - transcripts: ticket kapanışında oluşturulan transcript kayıtları.
+ * - transcript_messages: transcript'e ait mesaj snapshot'ları.
+ * - transcript_users: transcript'e ait kullanıcı snapshot'ları.
  */
 const SCHEMA = `
 PRAGMA journal_mode = WAL;
@@ -144,6 +146,103 @@ CREATE TABLE IF NOT EXISTS guard_settings (
   enabled        INTEGER NOT NULL DEFAULT 0,
   updated_at     INTEGER NOT NULL
 );
+
+-- ===================== TRANSCRIPT SYSTEM =====================
+
+CREATE TABLE IF NOT EXISTS transcripts (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  transcript_id   TEXT NOT NULL UNIQUE,
+  guild_id        TEXT NOT NULL,
+  channel_id      TEXT NOT NULL,
+  ticket_id       INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  ticket_owner_id TEXT NOT NULL,
+  claimed_by_id   TEXT,
+  closed_by_id    TEXT,
+  status          TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived', 'deleted')),
+  message_count   INTEGER NOT NULL DEFAULT 0,
+  user_count      INTEGER NOT NULL DEFAULT 0,
+  attachment_count INTEGER NOT NULL DEFAULT 0,
+  image_count     INTEGER NOT NULL DEFAULT 0,
+  video_count     INTEGER NOT NULL DEFAULT 0,
+  file_count      INTEGER NOT NULL DEFAULT 0,
+  token           TEXT NOT NULL,
+  created_at      INTEGER NOT NULL,
+  closed_at       INTEGER,
+  expires_at      INTEGER,
+  web_url         TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_transcripts_guild ON transcripts (guild_id);
+CREATE INDEX IF NOT EXISTS idx_transcripts_ticket ON transcripts (ticket_id);
+CREATE INDEX IF NOT EXISTS idx_transcripts_token ON transcripts (token);
+CREATE INDEX IF NOT EXISTS idx_transcripts_transcript_id ON transcripts (transcript_id);
+
+CREATE TABLE IF NOT EXISTS transcript_messages (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  transcript_id   TEXT NOT NULL REFERENCES transcripts(transcript_id) ON DELETE CASCADE,
+  message_id      TEXT NOT NULL,
+  user_id         TEXT NOT NULL,
+  username        TEXT NOT NULL,
+  display_name    TEXT,
+  discriminator   TEXT,
+  avatar_url      TEXT,
+  bot             INTEGER NOT NULL DEFAULT 0,
+  content         TEXT,
+  cleaned_content TEXT,
+  edited_at       INTEGER,
+  created_at      INTEGER NOT NULL,
+  type            INTEGER NOT NULL DEFAULT 0,
+  reply_to_id     TEXT,
+  reply_preview   TEXT,
+  attachments     TEXT NOT NULL DEFAULT '[]',
+  embeds          TEXT NOT NULL DEFAULT '[]',
+  reactions       TEXT NOT NULL DEFAULT '[]',
+  sticker_items   TEXT NOT NULL DEFAULT '[]',
+  role_color      INTEGER,
+  role_name       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_transcript_msgs_transcript ON transcript_messages (transcript_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_transcript_msgs_user ON transcript_messages (transcript_id, user_id);
+
+CREATE TABLE IF NOT EXISTS transcript_users (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  transcript_id   TEXT NOT NULL REFERENCES transcripts(transcript_id) ON DELETE CASCADE,
+  user_id         TEXT NOT NULL,
+  username        TEXT NOT NULL,
+  display_name    TEXT,
+  discriminator   TEXT,
+  avatar_url      TEXT,
+  bot             INTEGER NOT NULL DEFAULT 0,
+  roles           TEXT NOT NULL DEFAULT '[]',
+  message_count   INTEGER NOT NULL DEFAULT 0,
+  first_message_at INTEGER,
+  last_message_at  INTEGER,
+  UNIQUE(transcript_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_transcript_users_transcript ON transcript_users (transcript_id);
+
+CREATE TABLE IF NOT EXISTS transcript_attachments (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  transcript_id   TEXT NOT NULL REFERENCES transcripts(transcript_id) ON DELETE CASCADE,
+  message_id      TEXT NOT NULL,
+  attachment_id   TEXT NOT NULL,
+  filename        TEXT NOT NULL,
+  content_type    TEXT,
+  size            INTEGER NOT NULL DEFAULT 0,
+  url             TEXT NOT NULL,
+  proxy_url       TEXT,
+  width           INTEGER,
+  height          INTEGER,
+  duration_secs   REAL,
+  archived        INTEGER NOT NULL DEFAULT 0,
+  archived_path   TEXT,
+  archived_at     INTEGER,
+  created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)
+);
+
+CREATE INDEX IF NOT EXISTS idx_transcript_attach_transcript ON transcript_attachments (transcript_id);
 `;
 
 module.exports = { SCHEMA };

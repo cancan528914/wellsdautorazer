@@ -19,6 +19,9 @@
     "@napi-rs/canvas": "^1.0.9",
     "discord.js": "^14.18.1",
     "dotenv": "^16.4.7",
+    "express": "^4.21.1",
+    "express-rate-limit": "^7.4.1",
+    "helmet": "^8.0.0",
     "libsodium-wrappers": "^0.8.4",
     "undici": "^6.28.1"
   }

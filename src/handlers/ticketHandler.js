@@ -32,8 +32,11 @@ const {
   buildCategoryFormEmbed,
   buildAddUserRow,
   buildLogEmbed,
+  buildTranscriptRow,
 } = require('../utils/ticketEmbeds');
 const { fetchChannelMessages, buildTranscriptFile } = require('../utils/transcript');
+let transcriptService = null;
+try { transcriptService = require('../services/transcriptService'); } catch { transcriptService = null; }
 
 const EPH = (extra = {}) => ({ flags: MessageFlags.Ephemeral, ...extra });
 
@@ -60,7 +63,7 @@ async function resolveCategory(guild) {
   }
 }
 
-async function sendLog(guild, event, data, files) {
+async function sendLog(guild, event, data, files, transcriptUrl) {
   try {
     if (!config.ticket.logEnabled) return;
     const id = config.ticket.logChannelId;
@@ -71,8 +74,8 @@ async function sendLog(guild, event, data, files) {
       return;
     }
 
-    // Tek-mesaj logu: ticket başına bir log mesajı tutulur, her işlemde düzenlenir.
-    const payload = { embeds: [buildLogEmbed(event, data)], ...(files?.length ? { files } : {}) };
+    const components = transcriptUrl ? (() => { const r = buildTranscriptRow(transcriptUrl); return r ? [r] : []; })() : [];
+    const payload = { embeds: [buildLogEmbed(event, data)], ...(files?.length ? { files } : {}), ...(components.length ? { components } : {}) };
     const ticketId = data?.ticketId;
     const knownId = data?.logMessageId || (ticketId ? getTicket(ticketId)?.log_message_id : null);
     if (knownId) {
@@ -511,6 +514,16 @@ async function handleCloseConfirm(interaction, approved) {
   logger.success(`Ticket #${ticket.id} kapatıldı (${interaction.user.tag})`);
   const closedFiles = await collectTranscript(ticket, interaction.channel, interaction.guild?.name, 'Kapalı');
   const freshClosed = getTicket(ticket.id) || ticket; // güncel claimed/closed bilgileri
+  let transcriptUrl = null;
+  if (transcriptService) {
+    try {
+      const res = await transcriptService.generateTranscript(freshClosed, interaction.channel, interaction.guild, interaction.user.id);
+      transcriptUrl = res.webUrl;
+      logger.success(`Ticket #${ticket.id} web transcript: ${transcriptUrl}`);
+    } catch (err) {
+      logger.warn(`Ticket #${ticket.id} web transcript oluşturulamadı: ${err.message}`);
+    }
+  }
   await sendLog(interaction.guild, 'closed', {
     ticketId: ticket.id,
     userId: ticket.user_id,
@@ -521,8 +534,9 @@ async function handleCloseConfirm(interaction, approved) {
     closedBy: freshClosed.closed_by ? String(freshClosed.closed_by) : String(interaction.user.id),
     closedAt: freshClosed.closed_at || Date.now(),
     ...(closedFiles.length ? { extra: '📄 Transkript dosyası eklendi.' } : {}),
-  }, closedFiles);
-  await interaction.editReply({ content: '🔒 Ticket kapatıldı.' }).catch(() => {});
+    ...(transcriptUrl ? { extra: (closedFiles.length ? '📄 Transkript dosyası eklendi. ' : '') + '📖 Web transcript hazır.' } : {}),
+  }, closedFiles, transcriptUrl);
+  await interaction.editReply({ content: transcriptUrl ? `🔒 Ticket kapatıldı. [📖 Transcript Aç](${transcriptUrl})` : '🔒 Ticket kapatıldı.' }).catch(() => {});
   return true;
 }
 
@@ -557,6 +571,15 @@ async function handleDeleteConfirm(interaction, approved) {
 
   // Transkript kanal silinmeden ÖNCE alınmalı
   const deletedFiles = await collectTranscript(ticket, channel, interaction.guild?.name, 'Silindi');
+  let deleteTranscriptUrl = null;
+  if (transcriptService) {
+    try {
+      const res = await transcriptService.generateTranscript(ticket, channel, interaction.guild, interaction.user.id);
+      deleteTranscriptUrl = res.webUrl;
+    } catch (err) {
+      logger.warn(`Ticket #${ticket.id} silme transcript hatası: ${err.message}`);
+    }
+  }
 
   const info = {
     ticketId: ticket.id,
@@ -565,7 +588,7 @@ async function handleDeleteConfirm(interaction, approved) {
     channelId: ticket.channel_id,
     actorId: interaction.user.id,
     logMessageId: ticket.log_message_id || null, // satır silinmeden önce yakala
-    ...(deletedFiles.length ? { extra: '📄 Transkript dosyası eklendi.' } : {}),
+    ...(deletedFiles.length || deleteTranscriptUrl ? { extra: `${deletedFiles.length ? '📄 Transkript dosyası eklendi.' : ''}${deleteTranscriptUrl ? ' 📖 Web transcript hazır.' : ''}`.trim() } : {}),
   };
 
   try {
@@ -582,7 +605,7 @@ async function handleDeleteConfirm(interaction, approved) {
 
   deleteTicket(ticket.id);
   logger.success(`Ticket #${ticket.id} silindi (${interaction.user.tag})`);
-  await sendLog(interaction.guild, 'deleted', info, deletedFiles);
+  await sendLog(interaction.guild, 'deleted', info, deletedFiles, deleteTranscriptUrl);
   // Kanal silindiği için editReply başarısız olabilir — önemli değil
   await interaction.editReply({ content: '🗑️ Ticket silindi.' }).catch(() => {});
   return true;

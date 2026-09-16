@@ -73,6 +73,14 @@ async function main() {
   // DB'yi en başta başlat (tablolar yoksa oluşur)
   initDatabase();
 
+  // Web transcript server (bot ile aynı process)
+  try {
+    const { startWebServer } = require('./src/web/server');
+    startWebServer().catch((e) => logger.warn(`Web server başlatılamadı: ${e.message}`));
+  } catch (e) {
+    logger.warn(`Web server modülü yüklenemedi: ${e.message}`);
+  }
+
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds, // slash command + butonlar için zorunlu

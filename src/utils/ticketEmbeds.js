@@ -303,6 +303,16 @@ function buildSetupResultEmbed(result) {
   return embed;
 }
 
+function buildTranscriptRow(url) {
+  if (!url || !/^https?:\/\//.test(url)) return null;
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setLabel('📖 Transcript Aç')
+      .setStyle(ButtonStyle.Link)
+      .setURL(url),
+  );
+}
+
 module.exports = {
   getPanelImage,
   getCategoryByKey,
@@ -319,5 +329,6 @@ module.exports = {
   buildLogEmbed,
   buildSetupResultEmbed,
   buildTopEmbed,
+  buildTranscriptRow,
   fmtTrDate,
 };

@@ -16,6 +16,7 @@ try {
   process.exit(1);
 }
 
+const crypto = require('crypto');
 const config = require('../config');
 const logger = require('../utils/logger');
 const { SCHEMA } = require('./schema');
@@ -258,6 +259,17 @@ module.exports = {
   saveGuardSettings,
   countGuardGuilds,
   dbHealthy,
+  // --- Transcript sistemi ---
+  createTranscript,
+  getTranscriptById,
+  getTranscriptByToken,
+  getTranscriptByTicketId,
+  getTranscriptMessages,
+  getTranscriptUsers,
+  getTranscriptAttachments,
+  updateTranscriptStatus,
+  deleteTranscript,
+  listTranscriptsByGuild,
 };
 
 // ---------- Ticket kayıtları ----------
@@ -730,5 +742,187 @@ function countGuardGuilds() {
   } catch (err) {
     logger.error('[DB] countGuardGuilds failed.', err);
     return 0;
+  }
+}
+
+// ===================== TRANSCRIPT DATABASE FUNCTIONS =====================
+
+function generateSecureToken(bytes = 32) {
+  return crypto.randomBytes(bytes).toString('hex');
+}
+
+function generateTranscriptId() {
+  return 'tr_' + crypto.randomBytes(16).toString('base64url');
+}
+
+function createTranscript({
+  guildId,
+  channelId,
+  ticketId,
+  ticketOwnerId,
+  claimedById,
+  closedById,
+  messageCount = 0,
+  userCount = 0,
+  attachmentCount = 0,
+  imageCount = 0,
+  videoCount = 0,
+  fileCount = 0,
+  webUrl = null,
+  expiresAt = null,
+}) {
+  try {
+    const transcriptId = generateTranscriptId();
+    const token = generateSecureToken(24);
+    const now = Date.now();
+
+    getDb()
+      .prepare(
+        `INSERT INTO transcripts (
+          transcript_id, guild_id, channel_id, ticket_id, ticket_owner_id, claimed_by_id, closed_by_id,
+          message_count, user_count, attachment_count, image_count, video_count, file_count,
+          token, created_at, closed_at, expires_at, web_url
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        transcriptId,
+        String(guildId),
+        String(channelId),
+        Number(ticketId),
+        String(ticketOwnerId),
+        claimedById ? String(claimedById) : null,
+        closedById ? String(closedById) : null,
+        Number(messageCount),
+        Number(userCount),
+        Number(attachmentCount),
+        Number(imageCount),
+        Number(videoCount),
+        Number(fileCount),
+        token,
+        now,
+        now,
+        expiresAt ? Number(expiresAt) : null,
+        webUrl ? String(webUrl) : null,
+      );
+
+    return { transcriptId, token };
+  } catch (err) {
+    logger.error(`[DB] createTranscript failed: ${ticketId}`, err);
+    throw err;
+  }
+}
+
+function getTranscriptById(transcriptId) {
+  try {
+    return getDb().prepare('SELECT * FROM transcripts WHERE transcript_id = ?').get(String(transcriptId)) || null;
+  } catch (err) {
+    logger.error(`[DB] getTranscriptById failed: ${transcriptId}`, err);
+    return null;
+  }
+}
+
+function getTranscriptByToken(token) {
+  try {
+    return getDb().prepare('SELECT * FROM transcripts WHERE token = ?').get(String(token)) || null;
+  } catch (err) {
+    logger.error(`[DB] getTranscriptByToken failed`, err);
+    return null;
+  }
+}
+
+function getTranscriptByTicketId(ticketId) {
+  try {
+    return getDb().prepare('SELECT * FROM transcripts WHERE ticket_id = ?').get(Number(ticketId)) || null;
+  } catch (err) {
+    logger.error(`[DB] getTranscriptByTicketId failed: ${ticketId}`, err);
+    return null;
+  }
+}
+
+function getTranscriptMessages(transcriptId, options = {}) {
+  try {
+    const { limit = 5000, offset = 0, userId = null, before = null, after = null } = options;
+    let sql = 'SELECT * FROM transcript_messages WHERE transcript_id = ?';
+    const params = [String(transcriptId)];
+
+    if (userId) {
+      sql += ' AND user_id = ?';
+      params.push(String(userId));
+    }
+    if (before) {
+      sql += ' AND created_at < ?';
+      params.push(Number(before));
+    }
+    if (after) {
+      sql += ' AND created_at > ?';
+      params.push(Number(after));
+    }
+
+    sql += ' ORDER BY created_at ASC LIMIT ? OFFSET ?';
+    params.push(Number(limit), Number(offset));
+
+    return getDb().prepare(sql).all(...params);
+  } catch (err) {
+    logger.error(`[DB] getTranscriptMessages failed: ${transcriptId}`, err);
+    return [];
+  }
+}
+
+function getTranscriptUsers(transcriptId) {
+  try {
+    return getDb()
+      .prepare('SELECT * FROM transcript_users WHERE transcript_id = ? ORDER BY message_count DESC')
+      .all(String(transcriptId));
+  } catch (err) {
+    logger.error(`[DB] getTranscriptUsers failed: ${transcriptId}`, err);
+    return [];
+  }
+}
+
+function getTranscriptAttachments(transcriptId) {
+  try {
+    return getDb()
+      .prepare('SELECT * FROM transcript_attachments WHERE transcript_id = ? ORDER BY created_at ASC')
+      .all(String(transcriptId));
+  } catch (err) {
+    logger.error(`[DB] getTranscriptAttachments failed: ${transcriptId}`, err);
+    return [];
+  }
+}
+
+function updateTranscriptStatus(transcriptId, status) {
+  try {
+    getDb().prepare('UPDATE transcripts SET status = ? WHERE transcript_id = ?').run(String(status), String(transcriptId));
+  } catch (err) {
+    logger.error(`[DB] updateTranscriptStatus failed: ${transcriptId}`, err);
+  }
+}
+
+function deleteTranscript(transcriptId) {
+  try {
+    getDb().prepare('DELETE FROM transcripts WHERE transcript_id = ?').run(String(transcriptId));
+  } catch (err) {
+    logger.error(`[DB] deleteTranscript failed: ${transcriptId}`, err);
+  }
+}
+
+function listTranscriptsByGuild(guildId, options = {}) {
+  try {
+    const { limit = 50, offset = 0, status = null } = options;
+    let sql = 'SELECT * FROM transcripts WHERE guild_id = ?';
+    const params = [String(guildId)];
+
+    if (status) {
+      sql += ' AND status = ?';
+      params.push(String(status));
+    }
+
+    sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+    params.push(Number(limit), Number(offset));
+
+    return getDb().prepare(sql).all(...params);
+  } catch (err) {
+    logger.error(`[DB] listTranscriptsByGuild failed: ${guildId}`, err);
+    return [];
   }
 }

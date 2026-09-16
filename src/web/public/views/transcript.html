@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1e1f22">
+<title>Ticket Transcript — WELLSD AUTORAZER</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/transcript.css">
+</head>
+<body>
+<div class="app" id="app">
+  <header class="header">
+    <div class="header-left">
+      <button class="icon-btn sidebar-toggle" id="sidebarToggle" aria-label="Menü">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+      <div class="brand">
+        <div class="brand-icon">🎫</div>
+        <span class="brand-name" id="brandName">WELLSD AUTORAZER</span>
+        <span class="brand-badge" id="brandBadge">TRANSCRIPT</span>
+      </div>
+      <nav class="tabs" id="headerTabs" role="tablist">
+        <button class="tab active" data-tab="messages" role="tab" aria-selected="true">💬 Mesajlar</button>
+        <button class="tab" data-tab="media" role="tab" aria-selected="false">🖼️ Medya</button>
+        <button class="tab" data-tab="participants" role="tab" aria-selected="false">👥 Katılımcılar</button>
+        <button class="tab" data-tab="events" role="tab" aria-selected="false">📋 Olaylar</button>
+      </nav>
+    </div>
+    <div class="header-right">
+      <div class="search-box">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="searchInput" type="search" placeholder="Ara... (Ctrl+K)" autocomplete="off" spellcheck="false">
+        <kbd>ESC</kbd>
+      </div>
+      <button class="icon-btn" id="themeToggle" title="Tema değiştir"><span id="themeIcon">🌙</span></button>
+      <button class="icon-btn" id="jumpTop" title="En başa">⬆</button>
+      <button class="icon-btn" id="jumpBottom" title="En alta">⬇</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-inner">
+        <section class="card">
+          <h3 class="card-title">🎫 Ticket Bilgisi</h3>
+          <dl class="info" id="ticketInfo"></dl>
+        </section>
+        <section class="card">
+          <h3 class="card-title">📅 Tarihler</h3>
+          <dl class="info" id="dateInfo"></dl>
+        </section>
+        <section class="card">
+          <h3 class="card-title">👥 Kişiler</h3>
+          <dl class="info" id="peopleInfo"></dl>
+        </section>
+        <section class="card">
+          <h3 class="card-title">📊 İstatistikler</h3>
+          <div class="stats" id="statsGrid"></div>
+        </section>
+        <section class="card">
+          <h3 class="card-title">👥 Katılımcılar <span class="muted" id="participantCount"></span></h3>
+          <div class="chips" id="userChips"></div>
+          <div class="participants" id="participantsList"></div>
+        </section>
+        <section class="card">
+          <h3 class="card-title">🔍 Filtreler</h3>
+          <div class="filter-group">
+            <div class="filter-label">Tür</div>
+            <div class="chips" id="typeFilters">
+              <button class="chip active" data-filter="all">Tümü</button>
+              <button class="chip" data-filter="text">Yazı</button>
+              <button class="chip" data-filter="image">Görsel</button>
+              <button class="chip" data-filter="video">Video</button>
+              <button class="chip" data-filter="file">Dosya</button>
+              <button class="chip" data-filter="embed">Embed</button>
+              <button class="chip" data-filter="bot">Bot</button>
+            </div>
+          </div>
+          <div class="filter-group">
+            <div class="filter-label">Medya</div>
+            <div class="chips" id="mediaFilters">
+              <button class="chip active" data-media="all">Tümü</button>
+              <button class="chip" data-media="images">🖼️ Görseller</button>
+              <button class="chip" data-media="videos">🎬 Videolar</button>
+              <button class="chip" data-media="files">📎 Dosyalar</button>
+            </div>
+          </div>
+        </section>
+        <section class="card muted-card">
+          <div class="muted" style="font-size:12px;line-height:1.6">Transcript token korumalı bir URL ile paylaşılmıştır. Linki yalnızca yetkili kişilerle paylaşın. Discord mesajları snapshot olarak saklanır; kullanıcı sunucudan ayrılsa bile görünüm korunur.</div>
+        </section>
+      </div>
+    </aside>
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <main class="main">
+      <div class="tab-panel active" id="panel-messages">
+        <div class="messages" id="messagesList" role="log" aria-label="Mesajlar"></div>
+        <div class="load-bar" id="loadBar" style="display:none"><span id="loadInfo"></span></div>
+      </div>
+      <div class="tab-panel" id="panel-media">
+        <div class="media-controls">
+          <div class="chips" id="mediaTabFilters">
+            <button class="chip active" data-mediatab="all">Tümü</button>
+            <button class="chip" data-mediatab="images">Görseller</button>
+            <button class="chip" data-mediatab="videos">Videolar</button>
+            <button class="chip" data-mediatab="files">Dosyalar</button>
+          </div>
+        </div>
+        <div class="media-grid" id="mediaGrid"></div>
+        <div class="empty" id="mediaEmpty" style="display:none">📭 Bu filtrede medya bulunamadı.</div>
+      </div>
+      <div class="tab-panel" id="panel-participants">
+        <div class="participants-detailed" id="participantsDetailed"></div>
+      </div>
+      <div class="tab-panel" id="panel-events">
+        <div class="timeline" id="timeline"></div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- Lightbox -->
+<div class="lightbox" id="lightbox" aria-hidden="true">
+  <button class="lightbox-close" id="lbClose" aria-label="Kapat">✕</button>
+  <button class="lightbox-nav prev" id="lbPrev" aria-label="Önceki">‹</button>
+  <button class="lightbox-nav next" id="lbNext" aria-label="Sonraki">›</button>
+  <div class="lightbox-body">
+    <img id="lbImg" alt="" style="display:none">
+    <video id="lbVideo" controls playsinline style="display:none"></video>
+  </div>
+  <div class="lightbox-meta"><span id="lbName"></span><span id="lbCounter"></span></div>
+</div>
+
+<!-- User modal -->
+<div class="modal" id="userModal" aria-hidden="true">
+  <div class="modal-card">
+    <button class="modal-close" id="userModalClose">✕</button>
+    <div id="userModalBody"></div>
+  </div>
+</div>
+
+<!-- Context menu -->
+<div class="ctx" id="ctxMenu" role="menu" style="display:none">
+  <button data-act="copy" role="menuitem">📋 Kopyala</button>
+  <button data-act="copyLink" role="menuitem">🔗 Linki kopyala</button>
+  <button data-act="jump" role="menuitem">➡️ Mesaja git</button>
+  <hr>
+  <button data-act="filterUser" role="menuitem">🔍 Bu kullanıcıyı filtrele</button>
+  <button data-act="profile" role="menuitem">👤 Profil</button>
+</div>
+
+<div class="toast-wrap" id="toastWrap" aria-live="polite"></div>
+
+<script id="transcriptData" type="application/json">__TRANSCRIPT_JSON__</script>
+<script src="/assets/transcript.js"></script>
+</body>
+</html>
