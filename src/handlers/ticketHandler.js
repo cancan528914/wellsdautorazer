@@ -270,6 +270,9 @@ async function createTicketFromSelect(interaction, categoryKey) {
 
     setTicketChannel(ticketId, channel.id);
 
+    // Görüntüleyici rolünü kesinlikle uygula (güvenlik ağı)
+    await ensureTicketViewerRole(channel);
+
     // Açık ticket paneli (+ ayarlıysa ekip rolü etiketi — bildirim garantili:
     // rol mention'a kapalıysa geçici açılır, mesaj sonrası eski haline döndürülür)
     const createdUnix = Math.floor(Date.now() / 1000);
@@ -671,8 +674,10 @@ async function refreshPanel(interaction, ticket, embed, components) {
 }
 
 /**
- * Açık ticketlara görüntüleyici rol iznini geriye dönük uygular (restartta bir kez).
- * Sonuç: { synced, skipped, failed }. Hiçbir hata fırlatmaz.
+ * Açık ticketlara görüntüleyici rol iznini kesin olarak uygular.
+ * - Mevcut overwrite VARSA bile (deny varsa) ZORLA günceller.
+ * - Rol hiyerarşisi/yetki hatalarını loglar ama diğer ticketları engellemez.
+ * Sonuç: { synced, skipped, failed }.
  */
 async function syncTicketViewerRole(client) {
   const result = { synced: 0, skipped: 0, failed: 0 };
@@ -692,30 +697,70 @@ async function syncTicketViewerRole(client) {
         result.skipped++;
         continue;
       }
-      const existing = ch.permissionOverwrites?.cache?.get(viewerId);
-      if (existing?.allow?.has?.(PermissionFlagsBits.ViewChannel)) {
+      const role = await ch.guild?.roles?.fetch(viewerId).catch(() => null);
+      if (!role) {
+        logger.warn(`Ticket #${t.id}: Görüntüleyici rol (${viewerId}) sunucuda bulunamadı.`);
         result.skipped++;
         continue;
       }
-      const role = await ch.guild?.roles?.fetch(viewerId).catch(() => null);
-      if (!role) {
+      const me = ch.guild.members.me;
+      if (!me?.permissionsIn(ch).has(PermissionFlagsBits.ManageRoles)) {
+        logger.warn(`Ticket #${t.id}: Botun kanalda MANAGE_ROLES yetkisi yok, atlanıyor.`);
+        result.failed++;
+        continue;
+      }
+      if (role.position >= me.roles.highest.position) {
+        logger.warn(`Ticket #${t.id}: Görüntüleyici rol botun en yüksek rolünden üst/aynı seviyede (${role.position} >= ${me.roles.highest.position}), atlanıyor.`);
+        result.failed++;
+        continue;
+      }
+      const existing = ch.permissionOverwrites.cache.get(viewerId);
+      const hasViewAllow = existing?.allow?.has?.(PermissionFlagsBits.ViewChannel) ?? false;
+      const hasViewDeny = existing?.deny?.has?.(PermissionFlagsBits.ViewChannel) ?? false;
+      if (hasViewAllow && !hasViewDeny) {
         result.skipped++;
         continue;
       }
       await ch.permissionOverwrites.edit(viewerId, {
         ViewChannel: true,
         ReadMessageHistory: true,
-      });
+        SendMessages: false,
+      }, `Ticket görüntüleyici rolü senkronu (ticket #${t.id})`);
       result.synced++;
+      logger.debug(`Ticket #${t.id}: Görüntüleyici rol izni uygulandı (role: ${viewerId})`);
     } catch (err) {
       result.failed++;
       logger.warn(`Ticket #${t.id} görüntüleme izni verilemedi: ${err.code || err.message}`);
     }
   }
   if (result.synced > 0 || result.failed > 0) {
-    logger.success(`Görüntüleyici rol senkronu: ${result.synced} eklendi, ${result.skipped} atlandı, ${result.failed} hatalı.`);
+    logger.success(`Görüntüleyici rol senkronu: ${result.synced} eklendi/güncellendi, ${result.skipped} zaten doğru, ${result.failed} hatalı.`);
   }
   return result;
+}
+
+/**
+ * Tek bir ticket kanalı için görüntüleyici rolünü zorla uygular (yeni ticket açılışında çağrılabilir).
+ * Hata fırlatmaz; başarı durumunu boolean döner.
+ */
+async function ensureTicketViewerRole(channel) {
+  const viewerId = config.ticket.viewerRoleId;
+  if (!viewerId) return false;
+  try {
+    const role = await channel.guild.roles.fetch(viewerId).catch(() => null);
+    if (!role) return false;
+    const me = channel.guild.members.me;
+    if (!me?.permissionsIn(channel).has(PermissionFlagsBits.ManageRoles)) return false;
+    if (role.position >= me.roles.highest.position) return false;
+    await channel.permissionOverwrites.edit(viewerId, {
+      ViewChannel: true,
+      ReadMessageHistory: true,
+      SendMessages: false,
+    }, `Ticket görüntüleyici rolü garanti (ticket açılış)`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 module.exports = {
@@ -724,4 +769,5 @@ module.exports = {
   handleAddUserSelect,
   sendLog,
   syncTicketViewerRole,
+  ensureTicketViewerRole,
 };
