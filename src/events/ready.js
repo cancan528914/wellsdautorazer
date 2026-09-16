@@ -45,6 +45,14 @@ module.exports = {
       logger.error('Ticketlar yüklenirken hata.', err);
     }
 
+    // Görüntüleyici rol: açık ticketlara geriye dönük izin uygula
+    try {
+      const { syncTicketViewerRole } = require('../handlers/ticketHandler');
+      await syncTicketViewerRole(client);
+    } catch (err) {
+      logger.error('Görüntüleyici rol senkronunda hata.', err);
+    }
+
     try {
       logger.info(`Guard: ${countGuardGuilds()} sunucuda aktif`);
     } catch (err) {

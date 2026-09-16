@@ -15,6 +15,7 @@ const {
   rollbackChannelDelete,
   rollbackChannelUpdate,
   rollbackBan,
+  rollbackUnban,
   rollbackTimeout,
   rollbackWebhook,
   rollbackGuild,
@@ -324,7 +325,7 @@ async function onGuildBanRemove(client, ban) {
       action: 'MEMBER_BAN_REMOVE',
       targetId: user.id,
       targetDesc: `Üye: ${user.tag || user.id}`,
-      doRollback: null, // unban geri alınmaz (manuel inceleme)
+      doRollback: () => rollbackUnban(guild, user.id),
     });
   } catch (err) {
     logger.error('Guard onGuildBanRemove failed.', err);

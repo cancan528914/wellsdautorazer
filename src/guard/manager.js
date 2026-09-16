@@ -14,6 +14,7 @@ const { isBotAction } = require('./tracker');
 const { punishExecutor, beginPunish, endPunish } = require('./punishment');
 const { sendBanLog, sendUnresolvedLog, sendAllowedLog } = require('./logger');
 const { noteEvent } = require('./health');
+const { recordIncident, markIncidentPunished } = require('./incidents');
 const db = require('../database/database');
 
 // `${guildId}:${action}:${targetId}:${executorId}` -> expiry (dedupe penceresi)
@@ -139,6 +140,12 @@ async function handleGuardEvent({ client, guild, action, targetId, targetDesc, d
       return { handled: true, punished: false, reason: 'duplicate' };
     }
 
+    // 3c. Incident: aynı saldırganın 5dk penceresindeki işlemleri gruplanır.
+    // Bu incidentte zaten ban yediyse tekrar ban atılmaz (rollback+log devam eder).
+    const incident = recordIncident(guild.id, execId, action, String(targetId));
+    const incidentInfo =
+      incident.count > 1 ? `🔗 Incident: ${incident.count} işlem (${incident.actions.join(', ')})` : null;
+
     // 4. Ban snapshot'ı ÖNCEDEN yakala (ban sonrası veri kaybolmasın)
     const execSnap = { id: execId, tag: executor.tag || 'Bilinmeyen', bot: !!executor.bot };
 
@@ -163,11 +170,26 @@ async function handleGuardEvent({ client, guild, action, targetId, targetDesc, d
         return { handled: true, punished: false, reason: 'duplicate' };
       }
       markPunished(guild.id, action, String(targetId), execId);
-      if (memberFirst) {
+      // Incident'te zaten banlandıysa ve hâlâ banlıysa tekrar deneme
+      let skipPunish = false;
+      if (incident.punished) {
+        try {
+          const stillBanned = await guild.bans.fetch(execId).catch(() => null);
+          skipPunish = !!stillBanned;
+        } catch {
+          skipPunish = false;
+        }
+      }
+      if (skipPunish) {
+        punishment = { ok: true, detail: 'Zaten banlı (incident — tekrar ban atılmadı).' };
+        rollback = await runRollback();
+      } else if (memberFirst) {
         rollback = await runRollback();
         punishment = await punishExecutor(guild, execId, `WELLSD GUARD: yetkisiz işlem (${def.label})`);
+        if (punishment.ok) markIncidentPunished(guild.id, execId);
       } else {
         punishment = await punishExecutor(guild, execId, `WELLSD GUARD: yetkisiz işlem (${def.label})`);
+        if (punishment.ok) markIncidentPunished(guild.id, execId);
         rollback = await runRollback();
       }
     } finally {
@@ -183,6 +205,7 @@ async function handleGuardEvent({ client, guild, action, targetId, targetDesc, d
       punishment,
       rollback,
       sensitive,
+      incident: incidentInfo,
     }).catch(() => {});
 
     logger.success(`Guard: ${execSnap.tag} cezalandırıldı (${def.label}) — ban=${punishment.ok} rollback=${rollback?.ok ?? 'yok'}`);

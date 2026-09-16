@@ -44,6 +44,7 @@ async function rollbackRoleDelete(guild, snapshot) {
 }
 
 async function rollbackRoleUpdate(guild, oldRole, newRole) {
+  const notes = [];
   try {
     await newRole.edit(
       {
@@ -55,11 +56,23 @@ async function rollbackRoleUpdate(guild, oldRole, newRole) {
       },
       'WELLSD GUARD rollback: yetkisiz rol düzenleme',
     );
-    markBotAction(guild.id, AuditLogEvent.RoleUpdate, newRole.id);
-    return ok('Rol eski ayarlarına döndürüldü.');
+    notes.push('ayarlar');
   } catch (err) {
     return fail(`Rol geri alınamadı: ${err.code || err.message}`);
   }
+  // Pozisyon geri yükleme (hiyerarşi engellerse logla, sahte başarı yazma)
+  try {
+    const oldPos = oldRole.rawPosition ?? oldRole.position;
+    if (Number.isFinite(oldPos)) {
+      await newRole.setPosition(oldPos, 'WELLSD GUARD rollback: rol sırası');
+      notes.push('sıra');
+    }
+  } catch (err) {
+    markBotAction(guild.id, AuditLogEvent.RoleUpdate, newRole.id);
+    return { ok: true, detail: `Rol ayarları döndürüldü; SIRA geri alınamadı (${err.code || 'hiyerarşi'}).` };
+  }
+  markBotAction(guild.id, AuditLogEvent.RoleUpdate, newRole.id);
+  return ok(`Rol eski haline döndürüldü (${notes.join(' + ')}).`);
 }
 
 /** Audit entry changes: $add/$remove dizileri. */
@@ -144,7 +157,9 @@ async function rollbackChannelDelete(guild, snapshot) {
 }
 
 async function rollbackChannelUpdate(guild, oldCh, newCh) {
+  const notes = [];
   try {
+    // 1. Temel ayarlar
     if (oldCh.type === ChannelType.GuildText || oldCh.type === ChannelType.GuildAnnouncement) {
       await newCh.edit(
         { name: oldCh.name, topic: oldCh.topic ?? undefined, nsfw: oldCh.nsfw, rateLimitPerUser: oldCh.rateLimitPerUser ?? 0 },
@@ -158,11 +173,53 @@ async function rollbackChannelUpdate(guild, oldCh, newCh) {
     } else {
       await newCh.edit({ name: oldCh.name }, 'WELLSD GUARD rollback');
     }
-    markBotAction(guild.id, AuditLogEvent.ChannelUpdate, newCh.id);
-    return ok('Kanal eski ayarlarına döndürüldü.');
+    notes.push('ayarlar');
   } catch (err) {
     return fail(`Kanal geri alınamadı: ${err.code || err.message}`);
   }
+  // 2. Kategori + sıra (eski snapshot event'ten gelir)
+  try {
+    if (oldCh.parentId !== undefined && oldCh.parentId !== newCh.parentId) {
+      await newCh.setParent(oldCh.parentId, 'WELLSD GUARD rollback: kategori');
+      notes.push('kategori');
+    }
+    const oldPos = oldCh.rawPosition ?? oldCh.position;
+    if (Number.isFinite(oldPos)) {
+      await newCh.setPosition(oldPos, 'WELLSD GUARD rollback: kanal sırası');
+      notes.push('sıra');
+    }
+  } catch (err) {
+    logger.warn?.(`Kanal konum rollback kısmi: ${err.code || err.message}`);
+    notes.push('konum-kısmi');
+  }
+  // 3. Permission overwrite'ları: sadece FARKLILAŞANLAR geri yazılır
+  try {
+    const oldOw = oldCh.permissionOverwrites?.cache;
+    const curOw = newCh.permissionOverwrites?.cache;
+    if (oldOw && curOw) {
+      let fixed = 0;
+      for (const [id, o] of oldOw) {
+        const cur = curOw.get(id);
+        const same =
+          cur &&
+          String(cur.allow?.bitfield ?? cur.allow) === String(o.allow?.bitfield ?? o.allow) &&
+          String(cur.deny?.bitfield ?? cur.deny) === String(o.deny?.bitfield ?? o.deny);
+        if (!same) {
+          await newCh.permissionOverwrites.edit(id, {
+            allow: o.allow?.bitfield ?? o.allow ?? 0n,
+            deny: o.deny?.bitfield ?? o.deny ?? 0n,
+          });
+          fixed++;
+        }
+      }
+      if (fixed) notes.push(`${fixed} izin`);
+    }
+  } catch (err) {
+    notes.push('izin-kısmi');
+    logger.warn?.(`Overwrite rollback kısmi: ${err.code || err.message}`);
+  }
+  markBotAction(guild.id, AuditLogEvent.ChannelUpdate, newCh.id);
+  return ok(`Kanal eski haline döndürüldü (${notes.join(' + ') || 'ad'}).`);
 }
 
 async function rollbackBan(guild, userId) {
@@ -173,6 +230,35 @@ async function rollbackBan(guild, userId) {
   } catch (err) {
     if (err?.code === 10026) return fail('Hedef zaten banlı değil.');
     return fail(`Ban kaldırılamadı: ${err.code || err.message}`);
+  }
+}
+
+/**
+ * Yetkisiz UNBAN rollback'i: hedef gerçekten önceden banlıysa banı tekrar uygular.
+ * Önceden ban kaydı YOKSA kimseyi banlamaz (yanlış hedef koruması).
+ */
+async function rollbackUnban(guild, userId) {
+  try {
+    let hadPriorBan = false;
+    try {
+      const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberBanAdd, limit: 10 }).catch(() => null);
+      for (const e of logs?.entries?.values?.() || []) {
+        if (e?.target && String(e.target.id) === String(userId)) {
+          hadPriorBan = true;
+          break;
+        }
+      }
+    } catch {
+      /* audit okunamazsa temkinli davran */
+    }
+    if (!hadPriorBan) {
+      return fail('Önceden ban kaydı bulunamadı — yanlış banlama engellendi (manuel inceleme).');
+    }
+    await guild.members.ban(String(userId), { reason: 'WELLSD GUARD rollback: yetkisiz unban', deleteMessageSeconds: 0 });
+    markBotAction(guild.id, AuditLogEvent.MemberBanAdd, String(userId));
+    return ok('Kaldırılan ban tekrar uygulandı.');
+  } catch (err) {
+    return fail(`Ban tekrar uygulanamadı: ${err.code || err.message}`);
   }
 }
 
@@ -223,12 +309,20 @@ async function rollbackWebhook(guild, channel) {
 
 async function rollbackGuild(guild, oldGuild) {
   try {
-    if (oldGuild.name && oldGuild.name !== guild.name) {
-      await guild.edit({ name: oldGuild.name }, 'WELLSD GUARD rollback: yetkisiz sunucu değişikliği');
-      markBotAction(guild.id, AuditLogEvent.GuildUpdate, guild.id);
-      return ok('Sunucu adı eski haline döndürüldü (diğer ayarlar manuel incelenmeli).');
+    // Güvenle geri alınabilir skaler ayarlar (tek API çağrısı)
+    const payload = {};
+    if (oldGuild.name != null && oldGuild.name !== guild.name) payload.name = oldGuild.name;
+    if (oldGuild.verificationLevel != null) payload.verificationLevel = oldGuild.verificationLevel;
+    if (oldGuild.defaultMessageNotifications != null) payload.defaultMessageNotifications = oldGuild.defaultMessageNotifications;
+    if (oldGuild.explicitContentFilter != null) payload.explicitContentFilter = oldGuild.explicitContentFilter;
+    if (oldGuild.afkTimeout != null) payload.afkTimeout = oldGuild.afkTimeout;
+    const keys = Object.keys(payload);
+    if (!keys.length) {
+      return fail('Geri alınacak değişiklik bulunamadı (manuel inceleme).');
     }
-    return fail('Geri alınacak değişiklik bulunamadı (manuel inceleme).');
+    await guild.edit(payload, 'WELLSD GUARD rollback: yetkisiz sunucu değişikliği');
+    markBotAction(guild.id, AuditLogEvent.GuildUpdate, guild.id);
+    return ok(`Sunucu ayarları geri alındı (${keys.join(', ')}). İkon/AFK kanalı gibi karmaşık alanlar manuel incelenmeli.`);
   } catch (err) {
     return fail(`Sunucu geri alınamadı: ${err.code || err.message}`);
   }
@@ -243,6 +337,7 @@ module.exports = {
   rollbackChannelDelete,
   rollbackChannelUpdate,
   rollbackBan,
+  rollbackUnban,
   rollbackTimeout,
   rollbackWebhook,
   rollbackGuild,

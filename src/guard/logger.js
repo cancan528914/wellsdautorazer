@@ -104,7 +104,7 @@ async function getLogChannel(guild) {
 }
 
 /** §23 formatı: ban öncesi yakalanan snapshot kullanılır. */
-async function sendBanLog(guild, { executor, actionLabel, guardLabel, targetDesc, punishment, rollback, sensitive = false }) {
+async function sendBanLog(guild, { executor, actionLabel, guardLabel, targetDesc, punishment, rollback, sensitive = false, incident = null }) {
   const ch = await getLogChannel(guild);
   if (!ch) return false;
   const u = userLabel(executor);
@@ -135,6 +135,9 @@ async function sendBanLog(guild, { executor, actionLabel, guardLabel, targetDesc
     );
   if (sensitive) {
     embed.addFields({ name: '🛡️ Hassas Hedef', value: 'Botun kritik rollerinden biri hedef alındı.', inline: false });
+  }
+  if (incident) {
+    embed.addFields({ name: '🔗 Incident', value: String(incident).slice(0, 500), inline: false });
   }
   try {
     await ch.send({ embeds: [embed] });

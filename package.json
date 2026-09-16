@@ -19,6 +19,7 @@
     "discord.js": "^14.18.1",
     "dotenv": "^16.4.7",
     "libsodium-wrappers": "^0.8.4",
+    "sharp": "^0.35.4",
     "undici": "^6.28.1"
   }
 }

@@ -19,6 +19,7 @@ const {
   claimTicket,
   closeTicket,
   deleteTicket,
+  getAllTickets,
   incrementClaimStat,
 } = require('../database/database');
 const {
@@ -228,6 +229,24 @@ async function createTicketFromSelect(interaction, categoryKey) {
           PermissionFlagsBits.ManageMessages,
         ],
       });
+    }
+
+    // Görüntüleyici rol (salt-okunur: görür + geçmişi okur, yazamaz)
+    const viewerRoleId = config.ticket.viewerRoleId;
+    if (viewerRoleId) {
+      try {
+        const viewerRole = await guild.roles.fetch(viewerRoleId).catch(() => null);
+        if (viewerRole) {
+          overwrites.push({
+            id: viewerRole.id,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
+          });
+        } else {
+          logger.warn(`TICKET_VIEWER_ROLE_ID bulunamadı: ${viewerRoleId} (görüntüleme izni verilmedi)`);
+        }
+      } catch (err) {
+        logger.warn(`Görüntüleyici rol çözülemedi: ${err.code || err.message}`);
+      }
     }
 
     let channel;
@@ -651,9 +670,58 @@ async function refreshPanel(interaction, ticket, embed, components) {
   }
 }
 
+/**
+ * Açık ticketlara görüntüleyici rol iznini geriye dönük uygular (restartta bir kez).
+ * Sonuç: { synced, skipped, failed }. Hiçbir hata fırlatmaz.
+ */
+async function syncTicketViewerRole(client) {
+  const result = { synced: 0, skipped: 0, failed: 0 };
+  const viewerId = config.ticket.viewerRoleId;
+  if (!viewerId) return result;
+  let tickets = [];
+  try {
+    tickets = getAllTickets().filter((t) => t.status === 'open');
+  } catch (err) {
+    logger.error('[DB] syncTicketViewerRole okuma hatası.', err);
+    return result;
+  }
+  for (const t of tickets) {
+    try {
+      const ch = await client.channels.fetch(t.channel_id).catch(() => null);
+      if (!ch?.isTextBased?.()) {
+        result.skipped++;
+        continue;
+      }
+      const existing = ch.permissionOverwrites?.cache?.get(viewerId);
+      if (existing?.allow?.has?.(PermissionFlagsBits.ViewChannel)) {
+        result.skipped++;
+        continue;
+      }
+      const role = await ch.guild?.roles?.fetch(viewerId).catch(() => null);
+      if (!role) {
+        result.skipped++;
+        continue;
+      }
+      await ch.permissionOverwrites.edit(viewerId, {
+        ViewChannel: true,
+        ReadMessageHistory: true,
+      });
+      result.synced++;
+    } catch (err) {
+      result.failed++;
+      logger.warn(`Ticket #${t.id} görüntüleme izni verilemedi: ${err.code || err.message}`);
+    }
+  }
+  if (result.synced > 0 || result.failed > 0) {
+    logger.success(`Görüntüleyici rol senkronu: ${result.synced} eklendi, ${result.skipped} atlandı, ${result.failed} hatalı.`);
+  }
+  return result;
+}
+
 module.exports = {
   handleTicketButton,
   createTicketFromSelect,
   handleAddUserSelect,
   sendLog,
+  syncTicketViewerRole,
 };

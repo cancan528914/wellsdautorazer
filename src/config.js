@@ -121,6 +121,8 @@ const config = {
     callCooldownMs: int('TICKET_CALL_COOLDOWN_MS', 300000), // Yetkili Çağır bekleme süresi (5 dk)
     // Yeni ticket açıldığında etiketlenecek rol (boşsa ping atılmaz).
     pingRoleId: (process.env.TICKET_PING_ROLE_ID || '').trim() || null,
+    // Açık ticketları salt-okunur görebilecek rol (boşsa ek izin verilmez).
+    viewerRoleId: (process.env.TICKET_VIEWER_ROLE_ID || '').trim() || null,
     color: 0x5865f2, // premium blurple
     panelAbout:
       process.env.TICKET_PANEL_ABOUT ||
