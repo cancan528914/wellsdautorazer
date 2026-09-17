@@ -45,12 +45,38 @@ module.exports = {
       logger.error('Ticketlar yüklenirken hata.', err);
     }
 
-    // Görüntüleyici rol: açık ticketlara geriye dönük izin uygula
+    // Staff ticket rolü + görüntüleyici rol: açık ticketlara geriye dönük izin uygula (spec 7,8)
     try {
-      const { syncTicketViewerRole } = require('../handlers/ticketHandler');
-      await syncTicketViewerRole(client);
+      const { syncStaffTicketPermissions, syncTicketViewerRole } = require('../handlers/ticketHandler');
+      const staffRes = await syncStaffTicketPermissions(client);
+      const viewRes = await syncTicketViewerRole(client);
+      if (staffRes.checked || viewRes.synced || staffRes.failed || viewRes.failed) {
+        logger.info(`Ticket permission repair tamam: staff ${staffRes.fixed}/${staffRes.checked} düzeltildi, viewer ${viewRes.synced} düzeltildi.`);
+      }
     } catch (err) {
-      logger.error('Görüntüleyici rol senkronunda hata.', err);
+      logger.error('Ticket permission senkronunda hata.', err);
+    }
+
+    // Kategori seviye staff izni (spec 6) — sadece bir kez, kanal overwrite zaten yeterli ama kategori de düzelsin
+    try {
+      const catId = config.ticket.categoryId;
+      const staffId = config.STAFF_TICKET_ROLE_ID || '1522773972393922730';
+      if (catId && staffId) {
+        for (const [, guild] of client.guilds.cache) {
+          try {
+            const cat = await guild.channels.fetch(catId).catch(() => null);
+            if (!cat || cat.type !== 4) continue; // 4 = GuildCategory
+            const existing = cat.permissionOverwrites.cache.get(staffId);
+            const hasView = existing?.allow?.has?.(require('discord.js').PermissionFlagsBits.ViewChannel);
+            if (!hasView) {
+              await cat.permissionOverwrites.edit(staffId, { ViewChannel: true, ReadMessageHistory: true, SendMessages: true }, 'Ticket kategori staff erişimi (startup)').catch(() => {});
+              logger.info(`Kategori ${cat.id} staff overwrite eklendi (guild ${guild.id})`);
+            }
+          } catch {}
+        }
+      }
+    } catch (err) {
+      logger.debug(`Kategori staff overwrite kontrolü atlandı: ${err.message}`);
     }
 
     try {

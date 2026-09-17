@@ -35,8 +35,12 @@ function idList(name) {
   return out;
 }
 
+// Sabit staff ticket rolü — tüm ticket kanallarında FULL erişim (View/Read/Send/ManageMessages)
+const STAFF_TICKET_ROLE_ID = '1522773972393922730';
+
 const config = {
   botName: 'WELLSD AUTORAZER',
+  STAFF_TICKET_ROLE_ID,
 
   // --- Hassas bilgiler (.env) ---
   token: required('DISCORD_TOKEN'),
@@ -54,6 +58,8 @@ const config = {
     const base = idList('STAFF_ROLE_IDS');
     const legacy = (process.env.TICKET_STAFF_ROLE_ID || '').trim(); // geriye uyumluluk
     if (/^\d{17,20}$/.test(legacy) && !base.includes(legacy)) base.push(legacy);
+    // Sabit staff ticket rolü HER ZAMAN yetkili — .env'de unutulsa bile
+    if (!base.includes(STAFF_TICKET_ROLE_ID)) base.push(STAFF_TICKET_ROLE_ID);
     return base;
   })(), // ekip komutları (ticket/mazeret/ses/setup/komutlarpng)
   // Global komut erişimi: doluysa SADECE bu roller + adminler komut kullanabilir.
@@ -110,7 +116,12 @@ const config = {
 
   // --- Ticket sistemi ---
   ticket: {
-    staffRoleId: (process.env.TICKET_STAFF_ROLE_ID || '').trim() || null,
+    // Sabit staff rol — env boşsa bile 1522773972393922730 kullanılır (hard-code yasak değil, merkezi constant)
+    staffRoleId: (() => {
+      const v = (process.env.TICKET_STAFF_ROLE_ID || '').trim();
+      if (/^\d{17,20}$/.test(v)) return v;
+      return STAFF_TICKET_ROLE_ID;
+    })(),
     categoryId: (process.env.TICKET_CATEGORY_ID || '').trim() || null,
     logChannelId: (process.env.TICKET_LOG_CHANNEL_ID || '').trim() || null,
     panelChannelId: (process.env.TICKET_PANEL_CHANNEL_ID || '').trim() || null,

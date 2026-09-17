@@ -40,10 +40,31 @@ try { transcriptService = require('../services/transcriptService'); } catch { tr
 
 const EPH = (extra = {}) => ({ flags: MessageFlags.Ephemeral, ...extra });
 
+// Sabit staff ticket rolü — her ticket kanalında FULL erişim
+const STAFF_TICKET_ROLE_ID = config.STAFF_TICKET_ROLE_ID || '1522773972393922730';
+let _guardTracker = null;
+try { _guardTracker = require('../guard/tracker'); } catch { _guardTracker = null; }
+
+function markTicketGuard(guildId, channelId) {
+  try { _guardTracker?.markBotAction?.(guildId, 'CHANNEL_OVERWRITE_CREATE', channelId, 'ticket-staff-perm'); } catch {}
+  try { _guardTracker?.markBotAction?.(guildId, 'CHANNEL_OVERWRITE_UPDATE', channelId, 'ticket-staff-perm'); } catch {}
+  try { _guardTracker?.markBotAction?.(guildId, 'CHANNEL_CREATE', channelId, 'ticket-create'); } catch {}
+}
+
 // ---------- Yardımcılar ----------
 
 async function resolveStaffRole(guild) {
-  const id = config.ticket.staffRoleId;
+  const id = config.ticket.staffRoleId || STAFF_TICKET_ROLE_ID;
+  if (!id) return null;
+  try {
+    return (await guild.roles.fetch(id).catch(() => null)) || null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveStaffTicketRole(guild) {
+  const id = STAFF_TICKET_ROLE_ID;
   if (!id) return null;
   try {
     return (await guild.roles.fetch(id).catch(() => null)) || null;
@@ -180,8 +201,16 @@ async function createTicketFromSelect(interaction, categoryKey) {
     }
 
     const staffRole = await resolveStaffRole(guild);
-    if (config.ticket.staffRoleId && !staffRole) {
-      logger.warn(`TICKET_STAFF_ROLE_ID bulunamadı: ${config.ticket.staffRoleId} (ticket yine de açılacak)`);
+    if ((config.ticket.staffRoleId || STAFF_TICKET_ROLE_ID) && !staffRole) {
+      logger.warn(`TICKET_STAFF_ROLE_ID bulunamadı: ${config.ticket.staffRoleId || STAFF_TICKET_ROLE_ID} (ticket yine de açılacak)`);
+      // Spec 14: loga yaz
+      try {
+        const logChId = config.ticket.logChannelId || config.guard?.logChannelId;
+        if (logChId) {
+          const lc = await guild.channels.fetch(logChId).catch(() => null);
+          if (lc?.isTextBased()) await lc.send(`⚠️ **TICKET STAFF ROLE NOT FOUND**\nRole ID: \`${STAFF_TICKET_ROLE_ID}\`\nTicket #? oluşturulurken rol bulunamadı.`).catch(() => {});
+        }
+      } catch {}
     }
     const parent = await resolveCategory(guild);
     if (config.ticket.categoryId && !parent) {
@@ -199,61 +228,71 @@ async function createTicketFromSelect(interaction, categoryKey) {
       categoryLabel: category.label,
     });
 
-    const overwrites = [
-      { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-      {
-        id: interaction.user.id,
-        allow: [
-          PermissionFlagsBits.ViewChannel,
-          PermissionFlagsBits.SendMessages,
-          PermissionFlagsBits.ReadMessageHistory,
-          PermissionFlagsBits.AttachFiles,
-          PermissionFlagsBits.EmbedLinks,
-        ],
-      },
-      {
-        id: interaction.client.user.id,
-        allow: [
-          PermissionFlagsBits.ViewChannel,
-          PermissionFlagsBits.SendMessages,
-          PermissionFlagsBits.ManageChannels,
-          PermissionFlagsBits.ReadMessageHistory,
-          PermissionFlagsBits.ManageMessages,
-        ],
-      },
-    ];
-    if (staffRole) {
-      overwrites.push({
-        id: staffRole.id,
-        allow: [
-          PermissionFlagsBits.ViewChannel,
-          PermissionFlagsBits.SendMessages,
-          PermissionFlagsBits.ReadMessageHistory,
-          PermissionFlagsBits.ManageMessages,
-        ],
+    // --- Permission overwrites: deduplicated Map (son yazan kazanır, staff FULL) ---
+    const overwritesMap = new Map();
+    const addOverwrite = (id, data) => { if (id) overwritesMap.set(String(id), { id: String(id), ...data }); };
+    addOverwrite(guild.roles.everyone.id, { deny: [PermissionFlagsBits.ViewChannel] });
+    addOverwrite(interaction.user.id, {
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.EmbedLinks],
+    });
+    addOverwrite(interaction.client.user.id, {
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages],
+    });
+
+    // SABIT STAFF TICKET ROLE — her ticketta FULL erişim (spec 3)
+    const staffTicketRole = await resolveStaffTicketRole(guild);
+    if (!staffTicketRole) {
+      logger.error(`⚠️ TICKET STAFF ROLE NOT FOUND — Role ID: ${STAFF_TICKET_ROLE_ID} (guild ${guild.id})`);
+      try {
+        const logChId = config.ticket.logChannelId;
+        if (logChId) {
+          const lc = await guild.channels.fetch(logChId).catch(() => null);
+          if (lc?.isTextBased()) await lc.send(`⚠️ **TICKET STAFF ROLE NOT FOUND**\nRole ID: \`${STAFF_TICKET_ROLE_ID}\`\nTicket açılışında staff erişimi verilemedi.`).catch(() => {});
+        }
+      } catch {}
+    } else {
+      // Bot hiyerarşi ve ManageChannels kontrolü (spec 15)
+      const me = guild.members.me;
+      if (me && staffTicketRole.position >= me.roles.highest.position) {
+        logger.warn(`Staff ticket rolü botun rolünden yüksek/eşit (${staffTicketRole.position} >= ${me.roles.highest.position}) — permission verilemeyebilir.`);
+      }
+      if (me && !me.permissions.has(PermissionFlagsBits.ManageChannels) && !me.permissions.has(PermissionFlagsBits.ManageRoles)) {
+        logger.warn(`Botun ManageChannels/ManageRoles yetkisi yok — staff overwrite uygulanamayabilir.`);
+      }
+      addOverwrite(staffTicketRole.id, {
+        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ManageMessages],
+      });
+    }
+    // Legacy staffRole (farklıysa ayrıca ekle, aynıysa zaten eklendi)
+    if (staffRole && String(staffRole.id) !== String(STAFF_TICKET_ROLE_ID)) {
+      addOverwrite(staffRole.id, {
+        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages],
       });
     }
 
-    // Görüntüleyici rol (salt-okunur: görür + geçmişi okur, yazamaz)
+    // Görüntüleyici rol (salt-okunur) — staff ile aynıysa SKIP (staff FULL kazanır, downgrade yok)
     const viewerRoleId = config.ticket.viewerRoleId;
-    if (viewerRoleId) {
+    if (viewerRoleId && String(viewerRoleId) !== String(STAFF_TICKET_ROLE_ID)) {
       try {
         const viewerRole = await guild.roles.fetch(viewerRoleId).catch(() => null);
         if (viewerRole) {
-          overwrites.push({
-            id: viewerRole.id,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
-          });
+          addOverwrite(viewerRole.id, { allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory] });
         } else {
           logger.warn(`TICKET_VIEWER_ROLE_ID bulunamadı: ${viewerRoleId} (görüntüleme izni verilmedi)`);
         }
       } catch (err) {
         logger.warn(`Görüntüleyici rol çözülemedi: ${err.code || err.message}`);
       }
+    } else if (viewerRoleId && String(viewerRoleId) === String(STAFF_TICKET_ROLE_ID)) {
+      logger.debug('Viewer rol staff ile aynı — viewer overwrite skip (staff FULL korunuyor).');
     }
+
+    const overwrites = [...overwritesMap.values()];
 
     let channel;
     try {
+      // Guard internal tracking — botun ticket oluşturması saldırı sayılmasın (spec 19)
+      markTicketGuard(guild.id, `pending-${ticketId}`);
       channel = await guild.channels.create({
         name: sanitizeChannelName(interaction.user.username, ticketId),
         type: ChannelType.GuildText,
@@ -261,6 +300,7 @@ async function createTicketFromSelect(interaction, categoryKey) {
         topic: `Ticket #${ticketId} • ${category.label} • Sahip: ${interaction.user.tag}`.slice(0, 1024),
         permissionOverwrites: overwrites,
       });
+      markTicketGuard(guild.id, channel.id);
     } catch (err) {
       deleteTicket(ticketId); // yetim satır bırakma
       logger.error(`Ticket kanalı oluşturulamadı (ticket #${ticketId}).`, err);
@@ -273,8 +313,24 @@ async function createTicketFromSelect(interaction, categoryKey) {
 
     setTicketChannel(ticketId, channel.id);
 
-    // Görüntüleyici rolünü kesinlikle uygula (güvenlik ağı)
+    // Kanal oluşturulduktan sonra İKİNCİ DOĞRULAMA (spec 4): gerçek permission state kontrolü + retry
+    await ensureStaffTicketAccess(channel, { verify: true, retry: 1 });
+    // Görüntüleyici rolünü kesinlikle uygula (güvenlik ağı) — staff ile aynıysa skip zaten
     await ensureTicketViewerRole(channel);
+    // Kategori miras kontrolü (spec 6): kategori varsa staff için View izni ver (kanal overwrite zaten var ama kategori de düzelsin)
+    if (parent) {
+      try {
+        const catRoleOv = parent.permissionOverwrites.cache.get(STAFF_TICKET_ROLE_ID);
+        const hasCatView = catRoleOv?.allow?.has?.(PermissionFlagsBits.ViewChannel);
+        if (!hasCatView) {
+          // Sadece kategori seviyesinde eksikse ekle, kanal overwrite'ı zaten var
+          await parent.permissionOverwrites.edit(STAFF_TICKET_ROLE_ID, { ViewChannel: true, ReadMessageHistory: true, SendMessages: true }, 'Ticket kategori staff erişimi').catch(() => {});
+          logger.debug(`Kategori ${parent.id} staff overwrite eklendi/güncellendi.`);
+        }
+      } catch (e) {
+        logger.debug(`Kategori staff overwrite kontrolü atlandı: ${e.message}`);
+      }
+    }
 
     // Açık ticket paneli (+ ayarlıysa ekip rolü etiketi — bildirim garantili:
     // rol mention'a kapalıysa geçici açılır, mesaj sonrası eski haline döndürülür)
@@ -436,6 +492,10 @@ async function handleClaim(interaction) {
     claimedBy: interaction.user.id,
   });
   await refreshPanel(interaction, ticket, embed, buildTicketButtons('open'));
+  // Spec 12: claim staff overwrite'ı silmemeli — doğrula, eksikse düzelt (sessiz)
+  try { await ensureStaffTicketAccess(interaction.channel, { verify: false, retry: 0 }); } catch {}
+  // Guard: panel edit saldırgan sayılmasın
+  markTicketGuard(interaction.guildId, ticket.channel_id);
   logger.success(`Ticket #${ticket.id} sahiplenildi: ${interaction.user.tag}`);
   await sendLog(interaction.guild, 'claimed', {
     ticketId: ticket.id,
@@ -493,9 +553,13 @@ async function handleCloseConfirm(interaction, approved) {
   await interaction.deferReply({ ...EPH() });
   closeTicket(ticket.id, interaction.user.id);
 
-  // Sahibin yazma yetkisini kaldır (okumaya devam edebilir)
+  // Sahibin yazma yetkisini kaldır (okumaya devam edebilir) — spec 13: staff bozma, sadece owner
   try {
+    markTicketGuard(interaction.guildId, interaction.channelId);
     await interaction.channel.permissionOverwrites.edit(ticket.user_id, { SendMessages: false });
+    markTicketGuard(interaction.guildId, interaction.channelId);
+    // Staff erişimi kapanışta korunmalı (kapatılmış ticket transcript için staff görmeli)
+    await ensureStaffTicketAccess(interaction.channel, { verify: false, retry: 0 }).catch(() => {});
   } catch (err) {
     logger.warn(`Ticket #${ticket.id} yazma kilidi verilemedi: ${err.code || err.message}`);
   }
@@ -700,12 +764,17 @@ async function refreshPanel(interaction, ticket, embed, components) {
  * Açık ticketlara görüntüleyici rol iznini kesin olarak uygular.
  * - Mevcut overwrite VARSA bile (deny varsa) ZORLA günceller.
  * - Rol hiyerarşisi/yetki hatalarını loglar ama diğer ticketları engellemez.
+ * - Staff ile aynı ID ise SKIP (staff FULL overwrite korunur, downgrade yok).
  * Sonuç: { synced, skipped, failed }.
  */
 async function syncTicketViewerRole(client) {
   const result = { synced: 0, skipped: 0, failed: 0 };
   const viewerId = config.ticket.viewerRoleId;
   if (!viewerId) return result;
+  if (String(viewerId) === String(STAFF_TICKET_ROLE_ID)) {
+    logger.debug('Viewer rol staff ile aynı — viewer sync skip (staff senkronu yeterli).');
+    return result;
+  }
   let tickets = [];
   try {
     tickets = getAllTickets().filter((t) => t.status === 'open');
@@ -764,11 +833,13 @@ async function syncTicketViewerRole(client) {
 
 /**
  * Tek bir ticket kanalı için görüntüleyici rolünü zorla uygular (yeni ticket açılışında çağrılabilir).
+ * Staff ile aynı ID ise false döner (staff FULL korunur).
  * Hata fırlatmaz; başarı durumunu boolean döner.
  */
 async function ensureTicketViewerRole(channel) {
   const viewerId = config.ticket.viewerRoleId;
   if (!viewerId) return false;
+  if (String(viewerId) === String(STAFF_TICKET_ROLE_ID)) return false;
   try {
     const role = await channel.guild.roles.fetch(viewerId).catch(() => null);
     if (!role) return false;
@@ -786,6 +857,220 @@ async function ensureTicketViewerRole(channel) {
   }
 }
 
+// ===================== STAFF TICKET ROLE (1522773972393922730) — FULL ACCESS =====================
+
+/**
+ * Tek bir ticket kanalı için STAFF rolünü kesin olarak uygular + gerçek izin doğrulaması.
+ * Spec 4,17,18: permissionOverwrites.edit sonrası permissionsFor ile doğrula, başarısızsa 1 retry.
+ * Guard internal tracking ekler (spec 19). Bot perms/hiyerarşi kontrolü (spec 15).
+ * @returns {Promise<boolean>} true = başarılı (View+Read+Send doğrulanmış)
+ */
+async function ensureStaffTicketAccess(channel, opts = {}) {
+  const { verify = true, retry = 1 } = opts;
+  const roleId = STAFF_TICKET_ROLE_ID;
+  if (!roleId) return false;
+  try {
+    const guild = channel.guild;
+    if (!guild) return false;
+    const role = await guild.roles.fetch(roleId).catch(() => null);
+    if (!role) {
+      logger.error(`⚠️ TICKET STAFF ROLE NOT FOUND — Role ID: ${roleId} (guild ${guild.id})`);
+      try {
+        const logChId = config.ticket.logChannelId;
+        if (logChId) {
+          const lc = await guild.channels.fetch(logChId).catch(() => null);
+          if (lc?.isTextBased()) await lc.send(`⚠️ **TICKET STAFF ROLE NOT FOUND**\nRole ID: \`${roleId}\`\nKanal: <#${channel.id}>`).catch(() => {});
+        }
+      } catch {}
+      return false;
+    }
+    const me = guild.members.me;
+    if (!me) return false;
+    const needPerm = PermissionFlagsBits.ManageRoles | PermissionFlagsBits.ManageChannels;
+    if (!me.permissions.has(PermissionFlagsBits.ManageChannels) && !me.permissions.has(PermissionFlagsBits.ManageRoles)) {
+      logger.warn(`Botun ManageChannels/ManageRoles yetkisi yok — staff overwrite verilemeyebilir (kanal ${channel.id}).`);
+    }
+    if (role.position >= me.roles.highest.position) {
+      logger.warn(`Staff ticket rolü bot rolünden yüksek/eşit (${role.position} >= ${me.roles.highest.position}) — overwrite başarısız olabilir (kanal ${channel.id}).`);
+    }
+    if (!me.permissionsIn(channel).has(PermissionFlagsBits.ManageRoles) && !me.permissionsIn(channel).has(PermissionFlagsBits.ManageChannels)) {
+      logger.warn(`Botun kanalda MANAGE_ROLES/MANAGE_CHANNELS yok (kanal ${channel.id}) — staff overwrite atlanıyor.`);
+      // yine de dene, API izin verirse
+    }
+    // Guard: botun overwrite işlemi saldırı sanılmasın
+    markTicketGuard(guild.id, channel.id);
+    await channel.permissionOverwrites.edit(roleId, {
+      ViewChannel: true,
+      ReadMessageHistory: true,
+      SendMessages: true,
+      AttachFiles: true,
+      EmbedLinks: true,
+      ManageMessages: true,
+    }, `Ticket staff role access (spec 3)`);
+    markTicketGuard(guild.id, channel.id);
+
+    if (!verify) return true;
+
+    // Gerçek izin doğrulaması (spec 17)
+    const perms = channel.permissionsFor(role);
+    const hasView = perms?.has(PermissionFlagsBits.ViewChannel);
+    const hasRead = perms?.has(PermissionFlagsBits.ReadMessageHistory);
+    const hasSend = perms?.has(PermissionFlagsBits.SendMessages);
+    if (hasView && hasRead && hasSend) {
+      logger.debug(`Staff ticket erişimi doğrulandı: #${channel.name} (${channel.id})`);
+      return true;
+    }
+    logger.warn(`Staff permission doğrulaması başarısız: #${channel.name} View:${hasView} Read:${hasRead} Send:${hasSend} (retry=${retry})`);
+    if (retry > 0) {
+      await new Promise((r) => setTimeout(r, 700));
+      // retry: tekrar edit + verify
+      markTicketGuard(guild.id, channel.id);
+      await channel.permissionOverwrites.edit(roleId, {
+        ViewChannel: true,
+        ReadMessageHistory: true,
+        SendMessages: true,
+        AttachFiles: true,
+        EmbedLinks: true,
+        ManageMessages: true,
+      }, `Ticket staff role retry`);
+      markTicketGuard(guild.id, channel.id);
+      const perms2 = channel.permissionsFor(role);
+      const ok2 = perms2?.has(PermissionFlagsBits.ViewChannel) && perms2?.has(PermissionFlagsBits.ReadMessageHistory) && perms2?.has(PermissionFlagsBits.SendMessages);
+      if (ok2) {
+        logger.success(`Staff ticket erişimi retry sonrası doğrulandı: #${channel.name}`);
+        return true;
+      }
+      logger.error(`Staff ticket erişimi retry sonrası HÂLÂ başarısız: #${channel.name} — manuel kontrol gerek (role hiyerarşi / bot yetkisi / kategori deny?).`);
+      return false;
+    }
+    return false;
+  } catch (err) {
+    logger.warn(`Staff ticket erişimi verilemedi (kanal ${channel?.id}): ${err.code || err.message}`);
+    return false;
+  }
+}
+
+/**
+ * Mevcut AÇIK ticketların tamamını tarar, STAFF rol overwrite'ını kontrol edip düzeltir.
+ * Spec 7,8,17,18: sadece ticket sistemine ait olduğu DB ile doğrulanan kanalları düzeltir.
+ * Sonuç: { checked, fixed, already, failed }
+ */
+async function syncStaffTicketPermissions(client) {
+  const result = { checked: 0, fixed: 0, already: 0, failed: 0 };
+  const roleId = STAFF_TICKET_ROLE_ID;
+  if (!roleId) {
+    logger.warn('STAFF_TICKET_ROLE_ID tanımlı değil — staff sync atlandı.');
+    return result;
+  }
+  let tickets = [];
+  try {
+    tickets = getAllTickets().filter((t) => t.status === 'open');
+  } catch (err) {
+    logger.error('[DB] syncStaffTicketPermissions okuma hatası.', err);
+    return result;
+  }
+  if (!tickets.length) {
+    logger.info('Staff ticket sync: açık ticket yok.');
+    return result;
+  }
+  // Guild/role varlık kontrolü (spec 14)
+  const sampleGuildId = tickets[0]?.guild_id;
+  let guildRoleExists = false;
+  try {
+    const g = sampleGuildId ? await client.guilds.fetch(sampleGuildId).catch(() => null) : null;
+    if (g) {
+      const r = await g.roles.fetch(roleId).catch(() => null);
+      guildRoleExists = !!r;
+      if (!r) {
+        logger.error(`⚠️ TICKET STAFF ROLE NOT FOUND — Role ID: ${roleId} (guild ${sampleGuildId}) — tüm ticketlarda staff erişimi verilemiyor!`);
+        try {
+          const logChId = config.ticket.logChannelId;
+          if (logChId) {
+            const lc = await g.channels.fetch(logChId).catch(() => null);
+            if (lc?.isTextBased()) await lc.send(`⚠️ **TICKET STAFF ROLE NOT FOUND**\nRole ID: \`${roleId}\`\nGuild: ${sampleGuildId}\nAçık ${tickets.length} ticketta staff erişimi verilemiyor.`).catch(() => {});
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+  if (!guildRoleExists) {
+    // rol yoksa tüm ticketlar failed sayılır ama crash olmaz (spec 14)
+    result.failed = tickets.length;
+    return result;
+  }
+
+  for (const t of tickets) {
+    result.checked++;
+    try {
+      const ch = await client.channels.fetch(t.channel_id).catch(() => null);
+      if (!ch?.isTextBased?.()) {
+        result.failed++;
+        logger.warn(`Ticket #${t.id}: kanal bulunamadı (${t.channel_id}) — atlanıyor.`);
+        continue;
+      }
+      // Bot perms/hiyerarşi kontrolü (spec 15)
+      const me = ch.guild.members.me;
+      const role = await ch.guild.roles.fetch(roleId).catch(() => null);
+      if (!role) { result.failed++; continue; }
+      if (me && role.position >= me.roles.highest.position) {
+        logger.warn(`Ticket #${t.id}: staff rolü bot rolünden yüksek/eşit — atlanıyor.`);
+        result.failed++;
+        continue;
+      }
+      // Mevcut overwrite kontrolü + permissionsFor gerçek doğrulama (spec 17)
+      const existing = ch.permissionOverwrites.cache.get(roleId);
+      const hasViewAllow = existing?.allow?.has?.(PermissionFlagsBits.ViewChannel) ?? false;
+      const hasReadAllow = existing?.allow?.has?.(PermissionFlagsBits.ReadMessageHistory) ?? false;
+      const hasSendAllow = existing?.allow?.has?.(PermissionFlagsBits.SendMessages) ?? false;
+      const hasViewDeny = existing?.deny?.has?.(PermissionFlagsBits.ViewChannel) ?? false;
+      let needsFix = false;
+      if (!existing || !hasViewAllow || !hasReadAllow || !hasSendAllow || hasViewDeny) needsFix = true;
+      else {
+        // overwrite var ama gerçek hesaplanmış izin yine de deny olabilir (kategori @everyone deny + staff allow eksik gibi)
+        const perms = ch.permissionsFor(role);
+        const ok = perms?.has(PermissionFlagsBits.ViewChannel) && perms?.has(PermissionFlagsBits.ReadMessageHistory) && perms?.has(PermissionFlagsBits.SendMessages);
+        if (!ok) needsFix = true;
+      }
+      if (!needsFix) { result.already++; continue; }
+      const ok = await ensureStaffTicketAccess(ch, { verify: true, retry: 1 });
+      if (ok) {
+        result.fixed++;
+        logger.success(`Ticket #${t.id} staff erişimi düzeltildi: #${ch.name}`);
+      } else {
+        result.failed++;
+      }
+    } catch (err) {
+      result.failed++;
+      logger.warn(`Ticket #${t.id} staff senkron hatası: ${err.code || err.message}`);
+    }
+  }
+  logger.success(`Staff ticket senkronu: ${result.checked} kontrol, ${result.fixed} düzeltildi, ${result.already} zaten doğru, ${result.failed} başarısız.`);
+  // Log kanalına özet (spec 20) — sadece fixed/failed varsa
+  if ((result.fixed > 0 || result.failed > 0) && tickets[0]?.guild_id) {
+    try {
+      const g = await client.guilds.fetch(tickets[0].guild_id).catch(() => null);
+      const logChId = config.ticket.logChannelId;
+      if (g && logChId) {
+        const lc = await g.channels.fetch(logChId).catch(() => null);
+        if (lc?.isTextBased()) {
+          await lc.send(`✅ **Ticket staff role access configured**\nRole: <@&${roleId}> (\`${roleId}\`)\nKontrol: ${result.checked} • Düzeltildi: ${result.fixed} • Zaten doğru: ${result.already} • Başarısız: ${result.failed}`).catch(() => {});
+        }
+      }
+    } catch {}
+  }
+  return result;
+}
+
+/**
+ * Tüm ticket permission repair (staff + viewer) — startup ve /ticketpermissionrepair ortak.
+ * Sadece DB ile doğrulanmış ticket kanallarını düzeltir (spec 8).
+ */
+async function repairAllTicketPermissions(client) {
+  const staffRes = await syncStaffTicketPermissions(client);
+  const viewerRes = await syncTicketViewerRole(client);
+  return { staff: staffRes, viewer: viewerRes };
+}
+
 module.exports = {
   handleTicketButton,
   createTicketFromSelect,
@@ -793,4 +1078,8 @@ module.exports = {
   sendLog,
   syncTicketViewerRole,
   ensureTicketViewerRole,
+  ensureStaffTicketAccess,
+  syncStaffTicketPermissions,
+  repairAllTicketPermissions,
+  STAFF_TICKET_ROLE_ID,
 };
