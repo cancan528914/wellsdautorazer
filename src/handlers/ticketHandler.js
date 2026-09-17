@@ -470,11 +470,23 @@ async function handleClaim(interaction) {
     return true;
   }
 
+  // Başkasının sahiplendiği ticket tekrar sahiplenilemez
+  if (ticket.claimed_by) {
+    const owner = String(ticket.claimed_by);
+    const me = String(interaction.user.id);
+    if (owner === me) {
+      await interaction.deferReply({ ...EPH() });
+      await interaction.editReply({ content: 'ℹ️ Bu ticket zaten sizin tarafınızdan sahiplenilmiş.' }).catch(() => {});
+      return true;
+    }
+    await interaction.reply({ content: `❌ Bu ticket zaten <@${owner}> tarafından sahiplenilmiş. Başka bir yetkili sahiplenemez.`, ...EPH() }).catch(() => {});
+    return true;
+  }
+
   await interaction.deferReply({ ...EPH() });
   const prevClaimedBy = ticket.claimed_by ? String(ticket.claimed_by) : null;
   claimTicket(ticket.id, interaction.user.id);
   // İstatistik SADECE gerçek yeni sahiplenmede +1 (aynı kişinin tekrarı sayılmaz).
-  // Transferde (farklı yetkili) her gerçek sahiplenme sayılır, kapanış etkilemez.
   if (prevClaimedBy !== String(interaction.user.id)) {
     try {
       incrementClaimStat(interaction.guildId, interaction.user.id);
