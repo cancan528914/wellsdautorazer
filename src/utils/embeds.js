@@ -285,7 +285,7 @@ function buildJoinLogEmbed({ member, guild }) {
       { name: '⏱️ Sunucuya katılma', value: `<t:${joinedUnix}:F>\n${istanbulJoin} *(Europe/Istanbul)*`, inline: true },
       { name: '👥 Sunucudaki üye sayısı', value: `**${memberCount}** üye`, inline: true },
     )
-    .setFooter({ text: 'Aztecas • Member Logs' })
+    .setFooter({ text: 'Javrex Bot System • Member Logs' })
     .setTimestamp(new Date(joinedAt));
   if (avatar) embed.setThumbnail(avatar);
   return embed;
