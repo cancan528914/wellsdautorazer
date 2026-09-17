@@ -186,6 +186,13 @@ const config = {
   // --- Quit (sunucudan ayrılma) logu ---
   quitLogChannelId: (process.env.QUIT_LOG_CHANNEL_ID || '').trim() || null,
 
+  // --- Join (sunucuya katılma) logu — spec: 1533266772633850027 ---
+  joinLogChannelId: (() => {
+    const v = (process.env.JOIN_LOG_CHANNEL_ID || '').trim();
+    if (/^\d{17,20}$/.test(v)) return v;
+    return '1533266772633850027';
+  })(),
+
   // --- Yardım menüsü görseli (/komutlarpng ile değişir; DB'deki değer önceliklidir) ---
   komutlarImage: (process.env.KOMUTLAR_IMAGE || '').trim() || null,
 

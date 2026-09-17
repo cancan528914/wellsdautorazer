@@ -208,6 +208,89 @@ function buildQuitRolesEmbed({ userId, userTag, roles = [], guild = null }) {
     .setDescription(`<@${userId}> (${String(userTag || '').slice(0, 100)})\n\n${lines.length ? lines.join('\n').slice(0, 4000) : '*Kayıtlı rol yok.*'}`);
 }
 
+/** Join log helpers */
+function formatIstanbul(ts) {
+  try {
+    const d = new Date(Number(ts));
+    const fmt = new Intl.DateTimeFormat('tr-TR', {
+      timeZone: 'Europe/Istanbul',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    return fmt.format(d);
+  } catch {
+    const d = new Date(Number(ts));
+    const p = (n) => String(n).padStart(2, '0');
+    return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  }
+}
+
+function formatAccountAge(createdAt) {
+  try {
+    const diff = Date.now() - Number(createdAt);
+    if (diff < 0) return 'az önce';
+    const sec = Math.floor(diff / 1000);
+    const days = Math.floor(sec / 86400);
+    const years = Math.floor(days / 365);
+    const months = Math.floor((days % 365) / 30);
+    const remDays = days % 30;
+    const parts = [];
+    if (years) parts.push(`${years} yıl`);
+    if (months) parts.push(`${months} ay`);
+    if (!years && remDays) parts.push(`${remDays} gün`);
+    if (!parts.length) {
+      const hrs = Math.floor(sec / 3600);
+      if (hrs) return `${hrs} saat`;
+      const mins = Math.floor(sec / 60);
+      if (mins) return `${mins} dakika`;
+      return 'az önce';
+    }
+    return parts.slice(0, 2).join(' ');
+  } catch {
+    return '—';
+  }
+}
+
+/** Join (katılma) bildirimi — şık, profesyonel, mention + avatar + tarihler + üye sayısı */
+function buildJoinLogEmbed({ member, guild }) {
+  const user = member.user;
+  const isBot = !!user.bot;
+  const createdAt = user.createdAt ? user.createdAt.getTime() : (user.createdTimestamp || Date.now());
+  const joinedAt = member.joinedAt ? member.joinedAt.getTime() : Date.now();
+  const memberCount = guild?.memberCount ?? guild?.members?.cache?.size ?? 0;
+  let avatar = null;
+  try { avatar = user.displayAvatarURL({ size: 256 }); } catch {}
+  const displayName = member.displayName || user.username;
+  const username = user.username;
+  const ageStr = formatAccountAge(createdAt);
+  const istanbulJoin = formatIstanbul(joinedAt);
+  const istanbulCreated = formatIstanbul(createdAt);
+  const createdUnix = Math.floor(createdAt / 1000);
+  const joinedUnix = Math.floor(joinedAt / 1000);
+
+  const embed = baseEmbed(isBot ? 0x3498db : config.colors.success || 0x2ecc71)
+    .setAuthor({ name: displayName, iconURL: avatar || undefined })
+    .setTitle('👋  YENİ ÜYE KATILDI')
+    .setDescription(`<@${user.id}>\nSunucumuza hoş geldin! 🎉`)
+    .addFields(
+      { name: '👤 Kullanıcı', value: `<@${user.id}>\n\`${displayName}\` (@${username})`, inline: true },
+      { name: '🆔 Kullanıcı ID', value: `\`${user.id}\``, inline: true },
+      { name: isBot ? '🤖 Hesap Türü' : '👤 Hesap Türü', value: isBot ? '🤖 Bot Hesabı' : '👤 Kullanıcı', inline: true },
+      { name: '📅 Hesap oluşturulma', value: `<t:${createdUnix}:D>\n${istanbulCreated}\n*${ageStr} önce*`, inline: true },
+      { name: '⏱️ Sunucuya katılma', value: `<t:${joinedUnix}:F>\n${istanbulJoin} *(Europe/Istanbul)*`, inline: true },
+      { name: '👥 Sunucudaki üye sayısı', value: `**${memberCount}** üye`, inline: true },
+    )
+    .setFooter({ text: 'Aztecas • Member Logs' })
+    .setTimestamp(new Date(joinedAt));
+  if (avatar) embed.setThumbnail(avatar);
+  return embed;
+}
+
 module.exports = {
   formatUserList,
   buildIngameEmbed,
@@ -227,4 +310,7 @@ module.exports = {
   buildQuitPanelEmbed,
   buildQuitRolesRow,
   buildQuitRolesEmbed,
+  buildJoinLogEmbed,
+  formatIstanbul,
+  formatAccountAge,
 };

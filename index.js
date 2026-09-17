@@ -14,6 +14,7 @@ const readyEvent = require('./src/events/ready');
 const interactionEvent = require('./src/events/interactionCreate');
 const messageEvent = require('./src/events/messageCreate');
 const memberRemoveEvent = require('./src/events/guildMemberRemove');
+const memberAddEvent = require('./src/events/guildMemberAdd');
 const memberUpdateEvent = require('./src/events/guildMemberUpdate');
 const guardEvents = require('./src/guard/events');
 
@@ -109,6 +110,7 @@ async function main() {
   client.on(interactionEvent.name, (i) => interactionEvent.execute(i));
   client.on(messageEvent.name, (m) => messageEvent.execute(m));
   client.on(memberRemoveEvent.name, (m) => memberRemoveEvent.execute(m));
+  client.on(memberAddEvent.name, (m) => memberAddEvent.execute(m));
   client.on(memberUpdateEvent.name, (o, n) => memberUpdateEvent.execute(o, n));
   // Guard izleme (her listener kendi hatasını yutar; mevcut sistemler etkilenmez)
   client.on('roleCreate', (r) => guardEvents.onRoleCreate(client, r));
