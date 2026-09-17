@@ -185,10 +185,10 @@ async function handleGuardEvent({ client, guild, action, targetId, targetDesc, d
         rollback = await runRollback();
       } else if (memberFirst) {
         rollback = await runRollback();
-        punishment = await punishExecutor(guild, execId, `WELLSD GUARD: yetkisiz işlem (${def.label})`);
+        punishment = await punishExecutor(guild, execId, `Javrex Bot System Guard: yetkisiz işlem (${def.label})`);
         if (punishment.ok) markIncidentPunished(guild.id, execId);
       } else {
-        punishment = await punishExecutor(guild, execId, `WELLSD GUARD: yetkisiz işlem (${def.label})`);
+        punishment = await punishExecutor(guild, execId, `Javrex Bot System Guard: yetkisiz işlem (${def.label})`);
         if (punishment.ok) markIncidentPunished(guild.id, execId);
         rollback = await runRollback();
       }

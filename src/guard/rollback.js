@@ -14,7 +14,7 @@ const fail = (detail) => ({ ok: false, detail });
 async function rollbackRoleCreate(guild, role) {
   try {
     markBotAction(guild.id, AuditLogEvent.RoleDelete, role.id);
-    await role.delete('WELLSD GUARD rollback: yetkisiz rol oluşturma');
+    await role.delete('Javrex Bot System Guard rollback: yetkisiz rol oluşturma');
     return ok('Oluşturulan rol silindi.');
   } catch (err) {
     return fail(`Rol silinemedi: ${err.code || err.message}`);
@@ -29,7 +29,7 @@ async function rollbackRoleDelete(guild, snapshot) {
       hoist: !!snapshot.hoist,
       mentionable: !!snapshot.mentionable,
       permissions: snapshot.permissionsBitfield ?? 0n,
-      reason: 'WELLSD GUARD rollback: yetkisiz rol silme',
+      reason: 'Javrex Bot System Guard rollback: yetkisiz rol silme',
     });
     markBotAction(guild.id, AuditLogEvent.RoleCreate, created.id);
     try {
@@ -54,7 +54,7 @@ async function rollbackRoleUpdate(guild, oldRole, newRole) {
         mentionable: oldRole.mentionable,
         permissions: oldRole.permissions?.bitfield ?? 0n,
       },
-      'WELLSD GUARD rollback: yetkisiz rol düzenleme',
+      'Javrex Bot System Guard rollback: yetkisiz rol düzenleme',
     );
     notes.push('ayarlar');
   } catch (err) {
@@ -64,7 +64,7 @@ async function rollbackRoleUpdate(guild, oldRole, newRole) {
   try {
     const oldPos = oldRole.rawPosition ?? oldRole.position;
     if (Number.isFinite(oldPos)) {
-      await newRole.setPosition(oldPos, 'WELLSD GUARD rollback: rol sırası');
+      await newRole.setPosition(oldPos, 'Javrex Bot System Guard rollback: rol sırası');
       notes.push('sıra');
     }
   } catch (err) {
@@ -87,14 +87,14 @@ async function rollbackMemberRoles(guild, member, entry) {
     const fresh = (await guild.members.fetch(member.id).catch(() => null)) || member;
     const notes = [];
     if (added.length) {
-      await fresh.roles.remove(added, 'WELLSD GUARD rollback: yetkisiz rol verme').catch((e) => {
+      await fresh.roles.remove(added, 'Javrex Bot System Guard rollback: yetkisiz rol verme').catch((e) => {
         throw new Error(`verilen rol geri alınamadı: ${e.code || e.message}`);
       });
       markBotAction(guild.id, AuditLogEvent.MemberRoleUpdate, fresh.id);
       notes.push(`${added.length} rol geri alındı`);
     }
     if (removed.length) {
-      await fresh.roles.add(removed, 'WELLSD GUARD rollback: yetkisiz rol alma').catch((e) => {
+      await fresh.roles.add(removed, 'Javrex Bot System Guard rollback: yetkisiz rol alma').catch((e) => {
         throw new Error(`alınan rol geri verilemedi: ${e.code || e.message}`);
       });
       markBotAction(guild.id, AuditLogEvent.MemberRoleUpdate, fresh.id);
@@ -110,7 +110,7 @@ async function rollbackMemberRoles(guild, member, entry) {
 async function rollbackChannelCreate(guild, channel) {
   try {
     markBotAction(guild.id, AuditLogEvent.ChannelDelete, channel.id);
-    await channel.delete('WELLSD GUARD rollback: yetkisiz kanal oluşturma');
+    await channel.delete('Javrex Bot System Guard rollback: yetkisiz kanal oluşturma');
     return ok('Oluşturulan kanal silindi.');
   } catch (err) {
     return fail(`Kanal silinemedi: ${err.code || err.message}`);
@@ -143,7 +143,7 @@ async function rollbackChannelDelete(guild, snapshot) {
   try {
     const props = channelRecreateProps(snapshot);
     if (!props) return fail('Bu kanal türü otomatik kurulamıyor (manuel inceleme).');
-    const created = await guild.channels.create({ ...props, reason: 'WELLSD GUARD rollback: yetkisiz kanal silme' });
+    const created = await guild.channels.create({ ...props, reason: 'Javrex Bot System Guard rollback: yetkisiz kanal silme' });
     markBotAction(guild.id, AuditLogEvent.ChannelCreate, created.id);
     try {
       if (Number.isFinite(snapshot.position)) await created.setPosition(snapshot.position);
@@ -163,15 +163,15 @@ async function rollbackChannelUpdate(guild, oldCh, newCh) {
     if (oldCh.type === ChannelType.GuildText || oldCh.type === ChannelType.GuildAnnouncement) {
       await newCh.edit(
         { name: oldCh.name, topic: oldCh.topic ?? undefined, nsfw: oldCh.nsfw, rateLimitPerUser: oldCh.rateLimitPerUser ?? 0 },
-        'WELLSD GUARD rollback: yetkisiz kanal düzenleme',
+        'Javrex Bot System Guard rollback: yetkisiz kanal düzenleme',
       );
     } else if (oldCh.type === ChannelType.GuildVoice) {
       await newCh.edit(
         { name: oldCh.name, bitrate: oldCh.bitrate, userLimit: oldCh.userLimit },
-        'WELLSD GUARD rollback: yetkisiz kanal düzenleme',
+        'Javrex Bot System Guard rollback: yetkisiz kanal düzenleme',
       );
     } else {
-      await newCh.edit({ name: oldCh.name }, 'WELLSD GUARD rollback');
+      await newCh.edit({ name: oldCh.name }, 'Javrex Bot System Guard rollback');
     }
     notes.push('ayarlar');
   } catch (err) {
@@ -180,12 +180,12 @@ async function rollbackChannelUpdate(guild, oldCh, newCh) {
   // 2. Kategori + sıra (eski snapshot event'ten gelir)
   try {
     if (oldCh.parentId !== undefined && oldCh.parentId !== newCh.parentId) {
-      await newCh.setParent(oldCh.parentId, 'WELLSD GUARD rollback: kategori');
+      await newCh.setParent(oldCh.parentId, 'Javrex Bot System Guard rollback: kategori');
       notes.push('kategori');
     }
     const oldPos = oldCh.rawPosition ?? oldCh.position;
     if (Number.isFinite(oldPos)) {
-      await newCh.setPosition(oldPos, 'WELLSD GUARD rollback: kanal sırası');
+      await newCh.setPosition(oldPos, 'Javrex Bot System Guard rollback: kanal sırası');
       notes.push('sıra');
     }
   } catch (err) {
@@ -224,7 +224,7 @@ async function rollbackChannelUpdate(guild, oldCh, newCh) {
 
 async function rollbackBan(guild, userId) {
   try {
-    await guild.members.unban(String(userId), 'WELLSD GUARD rollback: yetkisiz ban');
+    await guild.members.unban(String(userId), 'Javrex Bot System Guard rollback: yetkisiz ban');
     markBotAction(guild.id, AuditLogEvent.MemberBanRemove, String(userId));
     return ok('Hedef kullanıcının banı kaldırıldı.');
   } catch (err) {
@@ -254,7 +254,7 @@ async function rollbackUnban(guild, userId) {
     if (!hadPriorBan) {
       return fail('Önceden ban kaydı bulunamadı — yanlış banlama engellendi (manuel inceleme).');
     }
-    await guild.members.ban(String(userId), { reason: 'WELLSD GUARD rollback: yetkisiz unban', deleteMessageSeconds: 0 });
+    await guild.members.ban(String(userId), { reason: 'Javrex Bot System Guard rollback: yetkisiz unban', deleteMessageSeconds: 0 });
     markBotAction(guild.id, AuditLogEvent.MemberBanAdd, String(userId));
     return ok('Kaldırılan ban tekrar uygulandı.');
   } catch (err) {
@@ -270,12 +270,12 @@ async function rollbackTimeout(guild, member, prev) {
   try {
     const target = (await guild.members.fetch(member.id).catch(() => null)) || member;
     if (prev?.applied) {
-      await target.timeout(null, 'WELLSD GUARD rollback: yetkisiz susturma');
+      await target.timeout(null, 'Javrex Bot System Guard rollback: yetkisiz susturma');
       markBotAction(guild.id, AuditLogEvent.MemberUpdate, target.id);
       return ok('Yetkisiz susturma kaldırıldı.');
     }
     if (prev?.untilMs && prev.untilMs > Date.now()) {
-      await target.timeout(prev.untilMs - Date.now(), 'WELLSD GUARD rollback: susturma geri yüklendi');
+      await target.timeout(prev.untilMs - Date.now(), 'Javrex Bot System Guard rollback: susturma geri yüklendi');
       markBotAction(guild.id, AuditLogEvent.MemberUpdate, target.id);
       return ok('Kaldırılan susturma geri yüklendi.');
     }
@@ -295,7 +295,7 @@ async function rollbackWebhook(guild, channel) {
     for (const w of fresh) {
       try {
         markBotAction(guild.id, AuditLogEvent.WebhookDelete, w.id);
-        await w.delete('WELLSD GUARD rollback: yetkisiz webhook');
+        await w.delete('Javrex Bot System Guard rollback: yetkisiz webhook');
         n++;
       } catch {
         /* tekil hata diğerlerini engellemez */
@@ -320,7 +320,7 @@ async function rollbackGuild(guild, oldGuild) {
     if (!keys.length) {
       return fail('Geri alınacak değişiklik bulunamadı (manuel inceleme).');
     }
-    await guild.edit(payload, 'WELLSD GUARD rollback: yetkisiz sunucu değişikliği');
+    await guild.edit(payload, 'Javrex Bot System Guard rollback: yetkisiz sunucu değişikliği');
     markBotAction(guild.id, AuditLogEvent.GuildUpdate, guild.id);
     return ok(`Sunucu ayarları geri alındı (${keys.join(', ')}). İkon/AFK kanalı gibi karmaşık alanlar manuel incelenmeli.`);
   } catch (err) {

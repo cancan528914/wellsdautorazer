@@ -1,7 +1,7 @@
 {
-  "name": "wellsd-autorazer",
+  "name": "javrex-bot-system",
   "version": "1.0.0",
-  "description": "WELLSD AUTORAZER - FiveM ekibi için production-ready Discord botu",
+  "description": "Javrex Bot System - FiveM ekibi için production-ready Discord botu",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {

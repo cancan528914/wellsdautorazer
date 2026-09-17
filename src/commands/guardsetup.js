@@ -81,7 +81,7 @@ module.exports = {
           logChannel = await guild.channels.create({
             name: GUARD_LOG_NAME,
             type: ChannelType.GuildText,
-            topic: 'WELLSD AUTORAZER Guard kayıtları (otomatik kurulum)'.slice(0, 1024),
+            topic: 'Javrex Bot System Guard kayıtları (otomatik kurulum)'.slice(0, 1024),
             permissionOverwrites: [
               { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
               {

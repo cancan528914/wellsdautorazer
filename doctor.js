@@ -66,7 +66,7 @@ function tcpCheck(host, port, timeout) {
 }
 
 async function main() {
-  console.log('--- WELLSD AUTORAZER bağlantı teşhisi ---\n');
+  console.log('--- Javrex Bot System bağlantı teşhisi ---\n');
 
   // 1. .env + config (değer yazdırılmaz)
   const envPath = path.join(__dirname, '.env');

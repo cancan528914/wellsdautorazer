@@ -75,7 +75,7 @@ function buildKomutlarEmbed() {
   const embed = new EmbedBuilder()
     .setColor(0xeab308) // şerif altını
     .setTitle('📜 Komutlar')
-    .setDescription('**WELLSD AUTORAZER** komut listesi — ihtiyacın olanı seç, detay için komutu kullan.')
+    .setDescription('**Javrex Bot System** komut listesi — ihtiyacın olanı seç, detay için komutu kullan.')
     .setFooter({ text: `${config.botName} | Yardım` })
     .setTimestamp();
   for (const g of GROUPS) {

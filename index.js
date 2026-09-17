@@ -1,5 +1,5 @@
 /**
- * WELLSD AUTORAZER - Ana giriş noktası
+ * Javrex Bot System - Ana giriş noktası
  */
 require('dotenv').config();
 

@@ -148,7 +148,7 @@ module.exports = {
 
     // Profil durumu rotasyonu: 5sn'de bir değişen "İzliyor" metni (sonsuz döngü).
     // Liste buradan düzenlenir. (Discord ~5sn sıklığa izin verir, daha hızlı yapmayın.)
-    const PRESENCE_ROTATION = ['Well SD 🤍 Javrex', 'Well SD 🤍 Martı', 'Well SD 🤍 Egax'];
+    const PRESENCE_ROTATION = ['Javrex Bot System 🤍 Javrex', 'Javrex Bot System 🤍 Martı', 'Javrex Bot System 🤍 Egax'];
     const PRESENCE_INTERVAL_MS = 5000;
     try {
       let presenceIdx = 0;

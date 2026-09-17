@@ -37,7 +37,7 @@
   }));
 
   // BRAND
-  $('#brandName').textContent = config.botName || 'WELLSD AUTORAZER';
+  $('#brandName').textContent = config.botName || 'Javrex Bot System';
 
   // SIDEBAR INFO
   const infoDl = (obj) => Object.entries(obj).map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`).join('');

@@ -1,6 +1,6 @@
 @echo off
 setlocal
-title WELLSD AUTORAZER
+title Javrex Bot System
 cd /d "%~dp0"
 
 where node >nul 2>nul
@@ -27,7 +27,7 @@ if not exist "node_modules" (
   )
 )
 
-echo WELLSD AUTORAZER baslatiliyor...
+echo Javrex Bot System baslatiliyor...
 echo Durdurmak icin CTRL+C basin.
 echo.
 node index.js

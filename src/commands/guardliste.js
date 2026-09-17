@@ -54,7 +54,7 @@ function buildPages(rows) {
     const embed = new EmbedBuilder()
       .setColor(config.colors?.guardPanel ?? 0x9b59b6)
       .setDescription(text)
-      .setFooter({ text: `${config.botName} | Guard System • Aztecas${pages.length > 1 ? ` • ${i + 1}/${Math.min(pages.length, MAX_EMBEDS)}` : ''}` })
+      .setFooter({ text: `${config.botName} | Guard System • Javrex Bot System${pages.length > 1 ? ` • ${i + 1}/${Math.min(pages.length, MAX_EMBEDS)}` : ''}` })
       .setTimestamp();
     if (i === 0) embed.setTitle('🛡️ Guard Paneli');
     return embed;
@@ -79,7 +79,7 @@ module.exports = {
           .setColor(config.colors?.guardPanel ?? 0x9b59b6)
           .setTitle('🛡️ Guard Paneli')
           .setDescription(`${DIV}\n🛡️  GUARD SYSTEM\n${DIV}\n\n*Whitelist boş. \`/guardekle\` ile ekleyin.*`)
-          .setFooter({ text: `${config.botName} | Guard System • Aztecas` })
+          .setFooter({ text: `${config.botName} | Guard System • Javrex Bot System` })
           .setTimestamp();
         await interaction.reply({ embeds: [empty], flags: MessageFlags.Ephemeral });
       } else {

@@ -1,5 +1,5 @@
 /**
- * WELLSD AUTORAZER - Merkezi konfigürasyon
+ * Javrex Bot System - Merkezi konfigürasyon
  * Tüm değiştirilebilir değerler buradan yönetilir. Hassas veriler .env'den okunur.
  * Hard-code ID KULLANMAYIN - her şeyi .env üzerinden değiştirin.
  */
@@ -39,7 +39,7 @@ function idList(name) {
 const STAFF_TICKET_ROLE_ID = '1522773972393922730';
 
 const config = {
-  botName: 'WELLSD AUTORAZER',
+  botName: 'Javrex Bot System',
   STAFF_TICKET_ROLE_ID,
 
   // --- Hassas bilgiler (.env) ---
@@ -200,7 +200,7 @@ const config = {
   modLogChannelId: (process.env.MOD_LOG_CHANNEL_ID || '').trim() || null,
 
   // --- Veritabanı ---
-  dbPath: process.env.DB_PATH || './data/wellsd.db',
+  dbPath: process.env.DB_PATH || './data/Javrex Bot System.db',
 
   // --- Web Transcript Server ---
   web: {

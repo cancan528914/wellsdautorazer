@@ -112,7 +112,7 @@ async function runSetup(guild, { envPath } = {}) {
         name: LOG_CHANNEL_NAME,
         type: ChannelType.GuildText,
         ...(parent ? { parent: parent.id } : {}),
-        topic: 'WELLSD AUTORAZER ticket kayıtları (otomatik kurulum)'.slice(0, 1024),
+        topic: 'Javrex Bot System ticket kayıtları (otomatik kurulum)'.slice(0, 1024),
         permissionOverwrites: overwrites,
       });
       created = true;

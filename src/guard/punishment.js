@@ -53,7 +53,7 @@ async function punishExecutor(guild, executorId, reason) {
       return { ok: false, detail: 'Hedef sunucu sahibi (banlanamaz).' };
     }
     markBotAction(guild.id, AuditLogEvent.MemberBanAdd, id);
-    await guild.members.ban(id, { reason: String(reason || 'WELLSD GUARD: yetkisiz kritik işlem').slice(0, 512), deleteMessageSeconds: 0 });
+    await guild.members.ban(id, { reason: String(reason || 'Javrex Bot System Guard: yetkisiz kritik işlem').slice(0, 512), deleteMessageSeconds: 0 });
     return { ok: true, detail: 'Sunucudan banlandı.' };
   } catch (err) {
     if (err?.code === 50013) return { ok: false, detail: 'Ban atılamadı (yetki/hiyerarşi: BanMembers veya rol sıralaması).' };
