@@ -41,6 +41,9 @@ function errorTextFor(query, base) {
   if (d === 'invalid_json' || d === 'invalid_players') {
     return `⚠️ **FiveM sunucusundan geçersiz oyuncu verisi geldi.**${srv}\n\nSunucu beklenmedik formatta cevap verdi.`;
   }
+  if (d === 'anonymized') {
+    return `🔒 **Oyuncu listesi anonimleştirilmiş.**${srv}\n\nGerçek liste için \`sv_playersToken\` + \`FIVEM_PLAYERS_TOKEN\` gerekir.`;
+  }
   return `🔴 **FiveM sunucusu offline**\nSunucuya şu anda erişilemiyor. Lütfen daha sonra tekrar deneyin.${srv}`;
 }
 
@@ -230,7 +233,6 @@ function buildPaginationRow(page, totalPages) {
  * @param {object} h getEndpointHealth() sonucu
  */
 function buildStatusEmbed(h) {
-  const ok = (v) => (v ? '✅' : '❌');
   const ep = (e) => {
     if (!e) return '—';
     if (e.ok) return `✅ HTTP ${e.status} (${e.ms}ms)`;
@@ -248,22 +250,48 @@ function buildStatusEmbed(h) {
         : firstEpFail
           ? `${firstEpFail.path}:${firstEpFail.e.error || firstEpFail.e.kind}`
           : 'None';
+  const queryEmoji = h.queryStatus === 'LIVE' ? '🟢 ONLINE' : h.queryStatus === 'ANONYMIZED' ? '🟡 ANONYMIZED' : h.queryStatus === 'PARTIAL' ? '🟡 PARTIAL' : '🔴 OFFLINE/ERROR';
   const lines = [
+    `**Server:** \`${config.fivem.cfxId}\``,
     `**Host:** \`${h.host || '?'}\``,
     `**Port:** \`${h.port || '?'}\``,
     '',
+    '────────────────',
+    '',
+    `**TCP:** ${h.tcp ? (h.tcp.ok ? `✅ CONNECTED (${h.tcp.ms}ms)` : `❌ ${h.tcp.error} (${h.tcp.ms}ms)`) : '—'}`,
     `**Info:** ${ep(h.endpoints?.['/info.json'])}`,
     `**Dynamic:** ${ep(h.endpoints?.['/dynamic.json'])}`,
     `**Players:** ${ep(h.endpoints?.['/players.json'])}`,
     '',
+    `**Latency:** ${h.ms}ms`,
     `**Players:** ${pCount && typeof pCount.count === 'number' ? pCount.count : '—'}`,
-    `**Response:** ${h.ms}ms`,
+    '',
+    '────────────────',
+    '',
+    `**Players Token:** ${h.tokenConfigured ? '✅ CONFIGURED' : '❌ NOT SET'}`,
+    `**Query:** ${queryEmoji}${h.queryDetail && h.queryDetail !== 'init' ? ` (${h.queryDetail})` : ''}`,
+    `**Phase:** \`${h.phase || '—'}\``,
     `**Last Error:** \`${lastError}\``,
   ];
   const anyOk = h.endpoints && Object.values(h.endpoints).some((e) => e?.ok);
   return baseEmbed(anyOk ? ONLINE_GREEN : OFFLINE_RED)
     .setTitle('🎮 FiveM Query Status')
     .setDescription(lines.join('\n'));
+}
+
+/** ANONYMIZED: liste placeholder — gerçek isimler için token gerekir (§26). Public sonuç embed'i. */
+function buildAnonymizedEmbed({ hostname, onlineCount, maxClients, latencyMs, base }) {
+  const sb = shortBase(base);
+  return baseEmbed(FIVEM_ORANGE)
+    .setTitle('🎮 AKTİF OYUNCULAR')
+    .setDescription(
+      `${serverLine(hostname)}\n🟢 **Sunucu Online** — 👥 **${fmtCount(onlineCount, maxClients)}**\n\n` +
+        '🔒 **Oyuncu listesi anonimleştirilmiş (`PUBLIC_ANONYMIZED`).**\n' +
+        'Sunucu gerçek oyuncu isimlerini herkese açık vermiyor.\n' +
+        'Gerçek liste için sunucuda `sv_playersToken` yapılandırılıp bota `FIVEM_PLAYERS_TOKEN` olarak eklenmeli.' +
+        (sb ? `\n\nSunucu:\n\`${sb}\`` : ''),
+    )
+    .addFields({ name: '⏱️ Sorgu', value: `${latencyMs}ms`, inline: true });
 }
 
 module.exports = {
@@ -282,6 +310,7 @@ module.exports = {
   buildTagEmptyEmbed,
   buildOnlineEmptyEmbed,
   buildListUnavailableEmbed,
+  buildAnonymizedEmbed,
   buildPaginationRow,
   errorTextFor,
   buildPagedPayload,

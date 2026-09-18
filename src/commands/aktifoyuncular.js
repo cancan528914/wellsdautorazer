@@ -8,6 +8,7 @@ const { buildErrorEmbed } = require('../utils/embeds');
 const {
   buildOnlineEmptyEmbed,
   buildListUnavailableEmbed,
+  buildAnonymizedEmbed,
   buildPagedPayload,
   errorTextFor,
 } = require('../utils/fivemEmbeds');
@@ -58,6 +59,20 @@ module.exports = {
         }
         void sent;
         return;
+      }
+
+      if (q.status === 'ANONYMIZED') {
+        return interaction.editReply({
+          embeds: [
+            buildAnonymizedEmbed({
+              hostname: q.hostname,
+              onlineCount: q.onlineCount,
+              maxClients: q.maxClients,
+              latencyMs: q.latencyMs,
+              base: q.base,
+            }),
+          ],
+        });
       }
 
       if (q.status === 'PARTIAL') {

@@ -4,7 +4,7 @@
  */
 const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { buildErrorEmbed } = require('../utils/embeds');
-const { buildTagEmptyEmbed, buildListUnavailableEmbed, buildPagedPayload, errorTextFor } = require('../utils/fivemEmbeds');
+const { buildTagEmptyEmbed, buildListUnavailableEmbed, buildAnonymizedEmbed, buildPagedPayload, errorTextFor } = require('../utils/fivemEmbeds');
 const { service, pagination } = require('../services/fivem');
 const { validateSearchTerm } = require('../services/fivem/parser');
 const logger = require('../utils/logger');
@@ -57,6 +57,20 @@ module.exports = {
           /* oturum kurulamadıysa ilk sayfa yine de görünür */
         }
         return;
+      }
+
+      if (query.status === 'ANONYMIZED') {
+        return interaction.editReply({
+          embeds: [
+            buildAnonymizedEmbed({
+              hostname: query.hostname,
+              onlineCount: query.onlineCount,
+              maxClients: query.maxClients,
+              latencyMs: query.latencyMs,
+              base: query.base,
+            }),
+          ],
+        });
       }
 
       if (query.status === 'PARTIAL') {

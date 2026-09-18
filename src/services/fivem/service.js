@@ -42,8 +42,9 @@ function setHealth(next) {
   health.source = next.source ?? health.source;
   health.base = next.base ?? health.base;
   health.updatedAt = Date.now();
-  health.lastError = next.lastError ?? (next.status === 'LIVE' || next.status === 'PARTIAL' ? null : health.lastError);
-  if (next.status === 'LIVE' || next.status === 'PARTIAL') health.lastGoodAt = Date.now();
+  const reachable = next.status === 'LIVE' || next.status === 'PARTIAL' || next.status === 'ANONYMIZED';
+  health.lastError = next.lastError ?? (reachable ? null : health.lastError);
+  if (reachable) health.lastGoodAt = Date.now();
   if (prev !== next.status) {
     const line =
       `🎮 FiveM Query Service | Status: ${prev} → ${next.status} (${next.detail}) | ` +
@@ -144,9 +145,19 @@ async function queryServer() {
 
   const baseHealth = { latencyMs, source: usedSource, base: usedBase };
 
-  // --- players BAŞARILI → LIVE ---
+  // --- players BAŞARILI ---
   if (pRes.ok) {
     const parsed = parser.parsePlayers(pRes.data);
+    // ANONYMIZED: liste placeholder (id:0/Player) → gerçek isimler için token gerekir (§26 TEST F).
+    if (parsed.ok && parsed.anonymized) {
+      const out = {
+        status: 'ANONYMIZED', detail: 'anonymized', players: [], playersSkipped: 0,
+        dynamic, info: null, hostname, onlineCount: dynamic?.clients ?? null, maxClients,
+        serverReported: null, latencyMs, base: usedBase, baseSource: usedSource,
+      };
+      setHealth({ ...baseHealth, status: 'ANONYMIZED', detail: 'anonymized', players: dynamic?.clients ?? 0, lastError: 'PUBLIC_ANONYMIZED' });
+      return out;
+    }
     if (!parsed.ok) {
       const out = {
         status: 'ERROR', detail: 'invalid_players', players: null, playersSkipped: 0,
@@ -203,6 +214,16 @@ async function searchPlayers(term) {
   if (q.status !== 'LIVE') return { query: q, term, matches: [] };
   const matches = parser.searchByName(q.players, term);
   return { query: q, term, matches };
+}
+
+/** ANONYMIZED durumu için kullanıcı metni (§26: token yönlendirmesi). */
+function anonymizedText(base) {
+  const b = base ? String(base).replace(/^https?:\/\//i, '').replace(/\/+$/, '') : null;
+  return (
+    `🔒 **Oyuncu listesi anonimleştirilmiş.**${b ? `\n\nSunucu:\n\`${b}\`` : ''}\n\n` +
+    'Sunucu gerçek oyuncu isimlerini herkese açık vermiyor (`PUBLIC_ANONYMIZED`).\n' +
+    'Gerçek liste için sunucuda `sv_playersToken` yapılandırılıp bota `FIVEM_PLAYERS_TOKEN` olarak eklenmeli.'
+  );
 }
 
 // ---------- Tekil kaynak getter'ları (§26) — önbellek farkında ----------
@@ -272,7 +293,15 @@ async function getEndpointHealth() {
   }
   const t0 = Date.now();
   const diag = await client.diagnoseBase(base);
-  return { ...diag, source, ms: Date.now() - t0 };
+  const h = getHealth();
+  return {
+    ...diag,
+    source,
+    ms: Date.now() - t0,
+    tokenConfigured: !!config.fivem.playersToken,
+    queryStatus: h.status,
+    queryDetail: h.detail,
+  };
 }
 
 function getHealth() {
@@ -289,5 +318,6 @@ module.exports = {
   getInfo,
   getEndpointHealth,
   getHealth,
-  STATUS: { LIVE: 'LIVE', PARTIAL: 'PARTIAL', OFFLINE: 'OFFLINE', ERROR: 'ERROR', STALE: 'STALE' },
+  anonymizedText,
+  STATUS: { LIVE: 'LIVE', PARTIAL: 'PARTIAL', OFFLINE: 'OFFLINE', ERROR: 'ERROR', STALE: 'STALE', ANONYMIZED: 'ANONYMIZED' },
 };

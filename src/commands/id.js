@@ -5,7 +5,7 @@
  */
 const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { buildErrorEmbed } = require('../utils/embeds');
-const { buildPlayerEmbed, buildPlayerNotFoundEmbed, errorTextFor } = require('../utils/fivemEmbeds');
+const { buildPlayerEmbed, buildPlayerNotFoundEmbed, buildAnonymizedEmbed, errorTextFor } = require('../utils/fivemEmbeds');
 const { service } = require('../services/fivem');
 const { validatePlayerId } = require('../services/fivem/parser');
 const logger = require('../utils/logger');
@@ -57,6 +57,19 @@ module.exports = {
               onlineCount: query.onlineCount,
               maxClients: query.maxClients,
               latencyMs: query.latencyMs,
+            }),
+          ],
+        });
+      }
+      if (query.status === 'ANONYMIZED') {
+        return interaction.editReply({
+          embeds: [
+            buildAnonymizedEmbed({
+              hostname: query.hostname,
+              onlineCount: query.onlineCount,
+              maxClients: query.maxClients,
+              latencyMs: query.latencyMs,
+              base: query.base,
             }),
           ],
         });

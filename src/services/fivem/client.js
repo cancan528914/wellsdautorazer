@@ -35,7 +35,8 @@ function agent() {
 }
 
 function headers() {
-  const h = { 'User-Agent': 'JavrexBotSystem/1.0 (+discord-bot)', Accept: 'application/json' };
+  // Sade bot user-agent; Via / Upgrade-Insecure-Requests gibi tetikleyici header YOKTUR.
+  const h = { 'User-Agent': 'WELLSDAUTORIZER-FIVEM-QUERY', Accept: 'application/json' };
   const token = config.fivem.playersToken;
   if (token) h['X-Players-Token'] = token; // header-only; URL'e ASLA konmaz (§12)
   return h;
@@ -262,6 +263,8 @@ async function diagnoseBase(base, { timeoutMs } = {}) {
   const diag = { base, host, port, dns: null, tcp: null, endpoints: {} };
   if (!host || !port) {
     const err = 'BAD_BASE';
+    diag.phase = 'DNS_RESOLUTION';
+    diag.phaseDetail = err;
     diag.dns = { ok: false, ms: 0, address: null, error: err };
     diag.tcp = { ok: false, ms: 0, error: 'NOT_REACHED' };
     for (const p of ['/info.json', '/dynamic.json', '/players.json']) {
@@ -271,11 +274,12 @@ async function diagnoseBase(base, { timeoutMs } = {}) {
   }
   diag.dns = await checkDns(host, Math.min(t, 5000));
   diag.tcp = await checkTcp(host, port, Math.min(t, 5000));
-  // HTTP katmanı: 3 endpoint paralel, tek deneme (teşhis hızlı olmalı)
+  // HTTP katmanı: SIRALI, tek deneme. Paralel burst, korumalı sunucularda
+  // IP'yi geçici bloklatabildiği için BİLEREK yapılmaz (ölçüldü: burst → drop).
+  diag.phase = 'HTTP_REQUEST';
   const paths = ['/info.json', '/dynamic.json', '/players.json'];
-  const results = await Promise.all(paths.map((p) => fetchJson(`${base}${p}`, { attempts: 1, timeoutMs: t })));
-  paths.forEach((p, i) => {
-    const r = results[i];
+  for (const p of paths) {
+    const r = await fetchJson(`${base}${p}`, { attempts: 1, timeoutMs: t });
     diag.endpoints[p] = {
       ok: r.ok,
       status: r.status,
@@ -285,7 +289,29 @@ async function diagnoseBase(base, { timeoutMs } = {}) {
       snippet: r.snippet || null,
       summary: summarizeEndpoint(p, r.ok ? r.data : null),
     };
+  }
+  // Faz türetme: ilk takılan katman raporlanır (§22).
+  const epFail = paths.find((p) => {
+    const e = diag.endpoints[p];
+    return !e.ok && (e.kind === 'timeout' || e.kind === 'unreachable' || e.kind === 'connection_refused' || e.kind === 'dns_error' || e.kind === 'connection_reset' || e.kind === 'server_error');
   });
+  const epParseFail = paths.find((p) => diag.endpoints[p] && !diag.endpoints[p].ok && diag.endpoints[p].kind === 'invalid_json');
+  if (!diag.dns.ok) {
+    diag.phase = 'DNS_RESOLUTION';
+    diag.phaseDetail = diag.dns.error;
+  } else if (!diag.tcp.ok) {
+    diag.phase = 'TCP_CONNECT';
+    diag.phaseDetail = diag.tcp.error;
+  } else if (epFail) {
+    diag.phase = 'HTTP_REQUEST';
+    diag.phaseDetail = diag.endpoints[epFail].error;
+  } else if (epParseFail) {
+    diag.phase = 'JSON_PARSE';
+    diag.phaseDetail = diag.endpoints[epParseFail].error;
+  } else {
+    diag.phase = 'OK';
+    diag.phaseDetail = null;
+  }
   return diag;
 }
 

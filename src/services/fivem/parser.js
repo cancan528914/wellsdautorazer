@@ -29,9 +29,25 @@ function sanitizeName(raw) {
   return s || 'Bilinmeyen';
 }
 
-/** Ham players.json dizisini doğrulanmış listeye çevirir. Beklenmedik şekilde ASLA throw etmez. */
+/**
+ * Ham players.json dizisini doğrulanmış listeye çevirir. Beklenmedik şekilde ASLA throw etmez.
+ * ANONYMIZED tespiti (§26 TEST F): liste boş değil AMA tüm kayıtlar
+ * {id:0, name:"Player"} placeholder ise bu GERÇEK oyuncu değildir — yetkisiz/
+ * public yanıttır, gerçek veri sv_playersToken ister. `anonymized:true` döner.
+ */
+function isAnonymizedEntry(p) {
+  try {
+    return Number(p?.id) === 0 && String(p?.name ?? '').trim().toLowerCase() === 'player';
+  } catch {
+    return false;
+  }
+}
+
 function parsePlayers(raw) {
-  if (!Array.isArray(raw)) return { ok: false, players: [], skipped: 0 };
+  if (!Array.isArray(raw)) return { ok: false, players: [], skipped: 0, anonymized: false };
+  if (raw.length > 0 && raw.every(isAnonymizedEntry)) {
+    return { ok: true, players: [], skipped: 0, anonymized: true };
+  }
   const players = [];
   let skipped = 0;
   for (const p of raw) {
@@ -55,7 +71,7 @@ function parsePlayers(raw) {
     }
   }
   players.sort((a, b) => a.id - b.id); // stabil sıralama: server ID artan (spec §39-40)
-  return { ok: true, players, skipped };
+  return { ok: true, players, skipped, anonymized: false };
 }
 
 function findById(players, id) {
