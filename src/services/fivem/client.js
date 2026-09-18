@@ -37,7 +37,10 @@ function agent() {
 
 function headers() {
   // Sade bot user-agent; Via / Upgrade-Insecure-Requests gibi tetikleyici header YOKTUR.
-  const h = { 'User-Agent': 'WELLSDAUTORIZER-FIVEM-QUERY', Accept: 'application/json' };
+  // KRİTİK (ölçüldü): `Connection: keep-alive` (undici varsayılanı) bu sunucuda
+  // ~5sn tarpitte bekletiliyor, paralel keep-alive istekleri tamamen düşürülüyor.
+  // `Connection: close` ile aynı istek ~100ms'de 200 dönüyor. Bu yüzden açıkça close.
+  const h = { 'User-Agent': 'WELLSDAUTORIZER-FIVEM-QUERY', Accept: 'application/json', Connection: 'close' };
   const token = config.fivem.playersToken;
   if (token) h['X-Players-Token'] = token; // header-only; URL'e ASLA konmaz (§12)
   return h;
