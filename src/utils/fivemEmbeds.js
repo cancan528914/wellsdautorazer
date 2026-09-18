@@ -237,6 +237,17 @@ function buildStatusEmbed(h) {
     return `❌ ${e.error || e.kind || '?'}${e.status ? ` (HTTP ${e.status})` : ''} (${e.ms}ms)`;
   };
   const pCount = h.endpoints?.['/players.json']?.summary;
+  const firstEpFail = ['/info.json', '/dynamic.json', '/players.json']
+    .map((p) => ({ path: p, e: h.endpoints?.[p] }))
+    .find(({ e }) => e && !e.ok);
+  const lastError =
+    h.dns?.ok === false
+      ? `DNS:${h.dns.error}`
+      : h.tcp?.ok === false
+        ? `TCP:${h.tcp.error}`
+        : firstEpFail
+          ? `${firstEpFail.path}:${firstEpFail.e.error || firstEpFail.e.kind}`
+          : 'None';
   const lines = [
     `**Host:** \`${h.host || '?'}\``,
     `**Port:** \`${h.port || '?'}\``,
@@ -247,7 +258,7 @@ function buildStatusEmbed(h) {
     '',
     `**Players:** ${pCount && typeof pCount.count === 'number' ? pCount.count : '—'}`,
     `**Response:** ${h.ms}ms`,
-    `**Last Error:** \`${h.dns?.ok === false ? `DNS:${h.dns.error}` : h.tcp?.ok === false ? `TCP:${h.tcp.error}` : 'None'}\``,
+    `**Last Error:** \`${lastError}\``,
   ];
   const anyOk = h.endpoints && Object.values(h.endpoints).some((e) => e?.ok);
   return baseEmbed(anyOk ? ONLINE_GREEN : OFFLINE_RED)
