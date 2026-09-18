@@ -24,7 +24,6 @@ const {
 const ingameCmd = require('../commands/ingame');
 const aktiflikCmd = require('../commands/aktiflik');
 const ticketHandler = require('./ticketHandler');
-const fivemHandler = require('./fivemHandler');
 const { handleIcButton } = require('./icHandler');
 const { handleMazeretOpen } = require('./mazeretHandler');
 const { handleQuitButton } = require('./quitHandler');
@@ -44,11 +43,6 @@ async function handleButton(interaction) {
   // Ticket butonları ayrı handler'da (aynı giriş noktası, süre logları korunur)
   if (typeof customId === 'string' && customId.startsWith('ticket_')) {
     return ticketHandler.handleTicketButton(interaction);
-  }
-
-  // FiveM pagination butonları (/aktifoyuncular, /tag sayfa çevirme)
-  if (typeof customId === 'string' && customId.startsWith('fivem_p_')) {
-    return fivemHandler.handleFivemButton(interaction);
   }
 
   // IC onay + mazeret butonları
