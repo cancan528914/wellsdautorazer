@@ -23,11 +23,12 @@ const { isNetworkError } = require('../../utils/restTransport');
 const parser = require('./parser');
 
 const RETRY_DELAY_MS = 500;
-const MAX_ATTEMPTS = 2; // ilk deneme + 1 kontrollü retry (sadece geçici ağ hatalarında, §20)
+const MAX_ATTEMPTS = 2; // ilk deneme + 1 kontrollü retry (§20)
+// Retry SADECE gerçekten geçici durumlarda: timeout (belirsiz) ve 5xx (sunucu blip).
+// refused/dns/reset/unreachable/403/404/429/bozuk-veri KALICIDIR veya filtreyi
+// besler — retry hem işe yaramaz hem blok süresini uzatır. Bu yüzden retry YOK.
+const RETRYABLE = new Set(['timeout', 'server_error']);
 const BODY_SNIPPET_LEN = 120;
-
-// Sadece bu türlerde retry yapılır. refused/dns/403/404/429/bozuk-JSON kalıcıdır.
-const RETRYABLE = new Set(['timeout', 'unreachable', 'connection_reset', 'server_error']);
 
 function agent() {
   const t = Math.min(config.fivem.apiTimeoutMs, 15000);
@@ -278,7 +279,9 @@ async function diagnoseBase(base, { timeoutMs } = {}) {
   // IP'yi geçici bloklatabildiği için BİLEREK yapılmaz (ölçüldü: burst → drop).
   diag.phase = 'HTTP_REQUEST';
   const paths = ['/info.json', '/dynamic.json', '/players.json'];
+  const gap = Math.min(2000, Math.max(0, config.fivem.requestGapMs));
   for (const p of paths) {
+    if (gap > 0) await new Promise((r) => setTimeout(r, gap));
     const r = await fetchJson(`${base}${p}`, { attempts: 1, timeoutMs: t });
     diag.endpoints[p] = {
       ok: r.ok,

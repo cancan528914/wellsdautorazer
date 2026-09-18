@@ -62,13 +62,34 @@ function logFetchError(where, base, path, r) {
   const url = client.redactUrl(`${base}${path}`);
   const extra = r.snippet ? ` | body: ${JSON.stringify(r.snippet)}` : '';
   logger.warn(
-    `FiveM ${where} 실패 → ${client.describeKind(r.kind, r.status)} | URL: ${url} | ` +
+    `FiveM ${where} başarısız → ${client.describeKind(r.kind, r.status)} | URL: ${url} | ` +
       `Elapsed: ${r.ms}ms | HTTP: ${r.status ?? '-'}${extra}`,
   );
 }
 
 function pickHostname(dynamic, fallbackHostname) {
   return dynamic?.hostname || fallbackHostname || null;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Negatif sonuç önbelleği: OFFLINE/ERROR/PARTIAL bu süre boyunca sunucuya
+// tekrar sorulmadan aynı mesajla döner (komut spam'i blok uzatamaz).
+let lastFailure = null; // { at, base, out }
+
+/** Base değişmedikçe taze sayılan negatif sonuç varsa döndürür. */
+function negCached(base) {
+  if (!lastFailure) return null;
+  if (lastFailure.base !== base) return null;
+  if (Date.now() - lastFailure.at > config.fivem.negCacheMs) {
+    lastFailure = null;
+    return null;
+  }
+  return lastFailure.out;
+}
+
+function negStore(base, out) {
+  lastFailure = { at: Date.now(), base, out };
 }
 
 function pickMaxClients(dynamic) {
@@ -81,6 +102,11 @@ function pickMaxClients(dynamic) {
 async function queryServer() {
   const t0 = Date.now();
   const { primary, fallback } = client.resolveBases();
+  // Negatif önbellek: kısa süre önce başarısız olan base'e tekrar sorulmaz.
+  if (primary) {
+    const neg = negCached(primary.base);
+    if (neg) return neg;
+  }
   if (!primary) {
     const out = {
       status: 'OFFLINE',
@@ -130,6 +156,9 @@ async function queryServer() {
   const needDynamic =
     pRes.ok || pRes.kind === 'forbidden' || pRes.kind === 'not_found' || pRes.kind === 'rate_limited' || pRes.kind === 'invalid_json';
   if (needDynamic && usedBase) {
+    // Burst korumasına karşı pacing: art arda istekler arasına nefes payı.
+    const gap = config.fivem.requestGapMs;
+    if (gap > 0) await sleep(gap);
     try {
       dRes = await client.getDynamicRaw(usedBase);
     } catch {
@@ -165,6 +194,7 @@ async function queryServer() {
         serverReported: dynamic?.clients ?? null, latencyMs, base: usedBase, baseSource: usedSource,
       };
       setHealth({ ...baseHealth, status: 'ERROR', detail: 'invalid_players', players: 0, lastError: 'INVALID_PLAYERS_BODY' });
+      negStore(primary.base, out);
       return out;
     }
     const serverReported = dynamic?.clients ?? null;
@@ -187,6 +217,7 @@ async function queryServer() {
       serverReported: null, latencyMs, base: usedBase, baseSource: usedSource,
     };
     setHealth({ ...baseHealth, status: 'PARTIAL', detail: kind, players: dynamic.clients ?? 0, lastError: client.describeKind(kind, pRes.status) });
+    negStore(primary.base, out);
     return out;
   }
 
@@ -197,6 +228,7 @@ async function queryServer() {
     serverReported: null, latencyMs, base: usedBase, baseSource: usedSource,
   };
   setHealth({ ...baseHealth, status, detail: kind, players: 0, lastError: `${client.describeKind(kind, pRes.status)} @ ${usedBase}` });
+  negStore(primary.base, out);
   return out;
 }
 
@@ -319,5 +351,8 @@ module.exports = {
   getEndpointHealth,
   getHealth,
   anonymizedText,
+  _resetNegCache: () => {
+    lastFailure = null;
+  },
   STATUS: { LIVE: 'LIVE', PARTIAL: 'PARTIAL', OFFLINE: 'OFFLINE', ERROR: 'ERROR', STALE: 'STALE', ANONYMIZED: 'ANONYMIZED' },
 };

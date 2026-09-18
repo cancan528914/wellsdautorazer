@@ -239,6 +239,19 @@ const config = {
       const n = int('FIVEM_PLAYERS_CACHE_TTL_MS', 3000);
       return Math.min(30000, Math.max(1000, n));
     })(),
+    // Ardışık oyun-sunucusu istekleri arası bekleme (ms). Burst korumalı
+    // sunucularda art arda istekler IP bloklatabildiği için konur (0 kapatır).
+    requestGapMs: (() => {
+      const n = int('FIVEM_REQUEST_GAP_MS', 500);
+      return Math.min(5000, Math.max(0, n));
+    })(),
+    // Başarısız sorgu negatif önbelleği (ms). OFFLINE/ERROR/PARTIAL sonucu bu süre
+    // boyunca SUNUCUYA TEKRAR SORULMADAN aynı mesajla döner — komut spam'i
+    // blok süresini uzatamaz. Kullanıcıya gösterilen mesaj değişmez (dürüst hata).
+    negCacheMs: (() => {
+      const n = int('FIVEM_NEG_CACHE_MS', 15000);
+      return Math.min(60000, Math.max(5000, n));
+    })(),
     pageSize: 10, // pagination: sayfa başına oyuncu
     sessionTtlMs: 10 * 60 * 1000, // pagination buton oturumu ömrü
   },
