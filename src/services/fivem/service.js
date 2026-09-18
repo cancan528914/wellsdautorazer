@@ -81,15 +81,31 @@ async function queryServer() {
   }
 
   const base = resolved.base;
-  const [pRes, dRes, iRes] = await Promise.all([
-    client.getPlayersRaw(base).catch(() => ({ ok: false, kind: 'unreachable', ms: 0, data: null })),
-    client.getDynamicRaw(base).catch(() => ({ ok: false, kind: 'unreachable', ms: 0, data: null })),
-    client.getInfoRaw(base).catch(() => ({ ok: false, kind: 'unreachable', ms: 0, data: null })),
-  ]);
+
+  // Sıralı + az istek: önce players.json (zorunlu). dynamic.json sadece
+  // hostname/sayı için best-effort ikinci istek. Paralel burst, filtreli
+  // sunucularda tüm istekleri düşürdüğü için BİLEREK yapılmaz.
+  // info.json hot path'te çağrılmaz (embed'lerde kullanılmıyor).
+  const safeGet = async (fn) => {
+    try {
+      return await fn();
+    } catch {
+      return { ok: false, kind: 'unreachable', ms: 0, data: null };
+    }
+  };
+  const pRes = await safeGet(() => client.getPlayersRaw(base));
+  let dRes = { ok: false, kind: 'skipped', ms: 0, data: null };
+  if (pRes.ok) {
+    // LIVE yolunda meta için best-effort
+    dRes = await safeGet(() => client.getDynamicRaw(base));
+  } else if (pRes.kind === 'forbidden' || pRes.kind === 'not_found' || pRes.kind === 'rate_limited' || pRes.kind === 'invalid_json') {
+    // PARTIAL ayrımı için tek şans: dynamic erişilebilir mi?
+    dRes = await safeGet(() => client.getDynamicRaw(base));
+  }
   const latencyMs = Date.now() - t0;
 
   const dynamic = dRes.ok ? parser.parseDynamic(dRes.data) : null;
-  const info = iRes.ok ? parser.parseInfo(iRes.data) : null;
+  const info = null;
   const snapshot = resolved.snapshot || null;
   const hostname = pickHostname(dynamic, info, snapshot);
   const maxClients = pickMaxClients(dynamic, info, snapshot);
