@@ -22,6 +22,7 @@ const client = require('./client');
 const parser = require('./parser');
 const rcon = require('./rcon');
 const rconParser = require('./rconParser');
+const localBridge = require('./localBridge');
 
 const health = {
   status: 'UNKNOWN',
@@ -117,12 +118,37 @@ function mapRconKind(kind) {
 }
 
 /**
- * Tam sunucu sorgusu — PRIMARY: RCON (UDP) `status` (§1).
- * HTTP player endpointlerine düşülmez (§32). Asla throw etmez.
- * İmza eskisiyle aynıdır → /id, /tag, /aktifoyuncular değişmeden çalışır.
+ * Tam sunucu sorgusu. Kaynak önceliği:
+ *   1. Local bridge (FIVEM_LOCAL_BRIDGE_URL doluysa — aynı makinedeki köprü)
+ *   2. RCON (UDP) `status`
+ * HTTP player endpointlerine düşülmez. Asla throw etmez.
+ * İmza aynıdır → /id, /tag, /aktifoyuncular değişmeden çalışır.
  */
 async function queryServer() {
   const t0 = Date.now();
+  // --- 1) Local bridge (yapılandırılmışsa) ---
+  if (config.fivem.localBridge.url) {
+    let snap = null;
+    try {
+      snap = await localBridge.fetchSnapshot();
+    } catch (err) {
+      logger.error('Local bridge beklenmedik hata.', err);
+      snap = { ok: false, error: 'exception' };
+    }
+    if (snap && snap.ok) {
+      const out = {
+        players: snap.players, playersSkipped: 0, dynamic: null, info: null,
+        hostname: `CFX ${config.fivem.cfxId}`, onlineCount: snap.players.length,
+        maxClients: null, serverReported: null,
+        latencyMs: Date.now() - t0, base: config.fivem.localBridge.url, baseSource: 'local_bridge',
+        status: 'LIVE', detail: 'ok',
+      };
+      setHealth({ status: 'LIVE', detail: 'ok', players: snap.players.length, latencyMs: out.latencyMs, source: 'local_bridge', base: out.base });
+      return out;
+    }
+    logger.warn(`Local bridge erişilemedi (${snap?.error || 'unknown'}) — RCON yoluna düşülüyor.`);
+  }
+
   const rHost = String(config.fivem.rcon.host || '').trim() || '5.231.120.202';
   const rPort = Number(config.fivem.rcon.port) || 30120;
   const rBase = `udp://${rHost}:${rPort}`;
@@ -302,10 +328,27 @@ async function getEndpointHealth() {
     http = { ...diag, source };
   }
 
+  // Local bridge (yapılandırılmışsa; password yoksa ağa çıkılmaz).
+  let local = { configured: !!config.fivem.localBridge.url, ok: null, ms: null, players: null, error: null };
+  if (local.configured) {
+    try {
+      const s = await localBridge.fetchSnapshot();
+      local = {
+        configured: true, ok: s.ok, ms: s.ms,
+        players: s.ok ? s.players.length : null,
+        error: s.ok ? null : (s.error || 'unknown').toUpperCase(),
+      };
+    } catch (err) {
+      local = { configured: true, ok: false, ms: Date.now() - t0, players: null, error: 'EXCEPTION' };
+      logger.error('Local bridge health testi hata.', err);
+    }
+  }
+
   const h = getHealth();
   return {
     cfxId: config.fivem.cfxId,
     rcon: rconHealth,
+    local,
     http,
     ms: Date.now() - t0,
     tokenConfigured: !!config.fivem.playersToken,

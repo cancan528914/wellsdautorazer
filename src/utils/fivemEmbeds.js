@@ -284,6 +284,12 @@ function buildStatusEmbed(h) {
       : h.queryStatus === 'ANONYMIZED'
         ? '🟡 ANONYMIZED'
         : '🔴 OFFLINE/ERROR';
+  const lb = h.local || {};
+  const lbLine = !lb.configured
+    ? '⚪ NOT SET'
+    : lb.ok
+      ? `✅ ONLINE (${lb.players ?? 0} oyuncu, ${lb.ms ?? 0}ms)`
+      : `❌ ${lb.error || 'FAIL'}`;
   const lines = [
     `**CFX:** \`${h.cfxId || config.fivem.cfxId}\``,
     `**RCON Host:** \`${r.host || '?'}\``,
@@ -298,6 +304,7 @@ function buildStatusEmbed(h) {
     `**Latency:** ${typeof h.ms === 'number' ? h.ms : '—'}ms`,
     `**Query Source:** 🟢 RCON STATUS`,
     `**Password:** ${r.configured ? '✅ CONFIGURED' : '❌ NOT SET'}`,
+    `**Local Bridge:** ${lbLine}`,
     '',
     '────────────────',
     '',

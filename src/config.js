@@ -239,6 +239,17 @@ const config = {
       const n = int('FIVEM_PLAYERS_CACHE_TTL_MS', 3000);
       return Math.min(30000, Math.max(1000, n));
     })(),
+    // --- Local bridge (fivem-local-bridge paketi, AYNI makinede) ---
+    // URL doluysa oyuncu sorgularında RCON'dan ÖNCE köprü denenir.
+    // Boşsa kapalıdır (mevcut RCON davranışı aynen korunur).
+    localBridge: {
+      url: (process.env.FIVEM_LOCAL_BRIDGE_URL || '').trim() || null,
+      key: (process.env.FIVEM_LOCAL_BRIDGE_KEY || '').trim() || null,
+      timeoutMs: (() => {
+        const n = int('FIVEM_LOCAL_BRIDGE_TIMEOUT_MS', 3000);
+        return Math.min(15000, Math.max(1000, n));
+      })(),
+    },
     // --- FiveM RCON (UDP) — oyuncu sorgularının PRIMARY kaynağı ---
     // HTTP player endpointleri kapalı olsa bile RCON üzerinden çalışır.
     // Parola ASLA koda yazılmaz; sadece FIVEM_RCON_PASSWORD env'den okunur.
