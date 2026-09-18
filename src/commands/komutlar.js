@@ -26,6 +26,14 @@ const GROUPS = [
     ],
   },
   {
+    title: '🕹️ FiveM Canlı Sorgu',
+    commands: [
+      ['/id', 'FiveM aktif oyuncuyu server ID ile sorgular'],
+      ['/aktifoyuncular', 'FiveM aktif oyuncuların tamamını listeler'],
+      ['/tag', 'FiveM oyuncu isimlerinde metin arar'],
+    ],
+  },
+  {
     title: '🛡️ Guard',
     commands: [
       ['/guardekle', 'Kullanıcıyı Guard whitelistine ekler'],

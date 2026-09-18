@@ -202,6 +202,32 @@ const config = {
   // --- Veritabanı ---
   dbPath: process.env.DB_PATH || './data/Javrex Bot System.db',
 
+  // --- FiveM canlı oyuncu sorgu ---
+  // Veri HER ZAMAN doğrudan oyun sunucusundan (/players.json, /dynamic.json, /info.json) alınır.
+  // Server-list API'si (frontend.cfx-services.net — resmi SPA'nın kullandığı host) SADECE
+  // CFX kodundan IP:port çözümlemek için kullanılır; FIVEM_SERVER_ENDPOINT doluysa hiç çağrılmaz.
+  fivem: {
+    cfxId: (process.env.FIVEM_CFX_ID || '8emv3b3').trim() || '8emv3b3',
+    // Doğrudan oyun sunucusu adresi. Örn: FIVEM_SERVER_ENDPOINT=http://85.104.10.20:30120
+    // Boşsa CFX kodundan otomatik çözümlenir (önbelleğe alınır).
+    endpoint: (process.env.FIVEM_SERVER_ENDPOINT || '').trim() || null,
+    // Tek HTTP isteği zaman aşımı (ms). Aralık dışındaysa güvenli aralığa çekilir.
+    // Oyun sunucuları normalde <500ms cevap verir; 5000ms + 1 retry = en kötü ~10.5sn.
+    apiTimeoutMs: (() => {
+      const n = int('FIVEM_API_TIMEOUT_MS', 5000);
+      return Math.min(30000, Math.max(2000, n));
+    })(),
+    // Oyuncu/sunucu verisi önbellek süresi (ms). Komutlar "canlı"dır; uzun tutmayın.
+    cacheTtlMs: (() => {
+      const n = int('FIVEM_CACHE_TTL_MS', 4000);
+      return Math.min(30000, Math.max(1000, n));
+    })(),
+    // Endpoint çözümleme sonucu önbellek süresi (ms). IP:port nadiren değişir.
+    resolveTtlMs: 60 * 60 * 1000,
+    pageSize: 10, // pagination: sayfa başına oyuncu
+    sessionTtlMs: 10 * 60 * 1000, // pagination buton oturumu ömrü
+  },
+
   // --- Web Transcript Server ---
   web: {
     enabled: (process.env.WEB_ENABLED || 'true').toLowerCase() !== 'false',
