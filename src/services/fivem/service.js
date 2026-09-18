@@ -1,19 +1,20 @@
 /**
- * FiveM sorgu servisi — komutların tek giriş noktası.
+ * FiveM sorgu servisi — komutların tek giriş noktası (§26).
  *
  * queryServer() akışı:
- *   endpoint çözümle (config → discovery) → players.json (zorunlu) +
- *   dynamic.json/info.json (opsiyonel, kısmi başarı tolere edilir — spec §50)
+ *   aday bazlar (endpoint > host:port > connect_endpoint) → players.json (zorunlu,
+ *   sıralı ilk istek) → dynamic.json (best-effort ikinci istek: hostname/sayı).
+ *   info.json hot path'te çağrılmaz (embed'lerde kullanılmıyor); /fivemstatus
+ *   teşhisinde kontrol edilir.
  *
  * Durumlar (internal): LIVE | PARTIAL | OFFLINE | ERROR (+ STALE takibi health'te)
- * - LIVE:    players.json taze ve geçerli (dynamic/info eksik olabilir).
- * - PARTIAL: players alınamadı AMA dynamic/info ile sunucu erişilebilir
- *            (örn. 403/404 liste kısıtı) → isim listesi yok, sayı/hostname var.
- * - OFFLINE: sunucuya ulaşılamıyor (timeout/unreachable/5xx/no_endpoint).
- * - ERROR:   istek reddi/bozuk veri (403-notFound-429 hariç → 403/429 invalid_json
- *            liste için ERROR; dynamic-ok + players-403 ise PARTIAL).
+ * - LIVE:    players.json taze ve geçerli.
+ * - PARTIAL: players alınamadı AMA dynamic ile sunucu erişilebilir
+ *            (403/404/429/bozuk-liste) → isim listesi yok, sayı/hostname var.
+ * - OFFLINE: sunucuya ulaşılamıyor (timeout/refused/dns/reset/unreachable).
+ * - ERROR:   istek reddi/bozuk veri/sunucu hatası (403/404/429/5xx/invalid).
  *
- * Başarısız taze sorguda eski önbellek BAŞARI gibi sunulmaz (spec §22).
+ * Başarısız taze sorguda eski önbellek BAŞARI gibi sunulmaz.
  */
 const config = require('../../config');
 const logger = require('../../utils/logger');
@@ -25,9 +26,11 @@ const health = {
   detail: 'init',
   players: 0,
   latencyMs: null,
-  source: null, // 'direct' | null
+  source: null, // aday base kaynağı: config_endpoint | host_port | connect_endpoint
+  base: null,
   updatedAt: 0,
   lastGoodAt: 0,
+  lastError: null, // son hatanın teknik özeti (log/teşhis için)
 };
 
 function setHealth(next) {
@@ -36,32 +39,48 @@ function setHealth(next) {
   health.detail = next.detail;
   health.players = next.players ?? health.players;
   health.latencyMs = next.latencyMs ?? null;
-  health.source = next.source ?? null;
+  health.source = next.source ?? health.source;
+  health.base = next.base ?? health.base;
   health.updatedAt = Date.now();
+  health.lastError = next.lastError ?? (next.status === 'LIVE' || next.status === 'PARTIAL' ? null : health.lastError);
   if (next.status === 'LIVE' || next.status === 'PARTIAL') health.lastGoodAt = Date.now();
   if (prev !== next.status) {
-    const line = `🎮 FiveM Query Service | Status: ${prev} → ${next.status} (${next.detail}) | Players: ${health.players} | Latency: ${health.latencyMs ?? '-'}ms`;
+    const line =
+      `🎮 FiveM Query Service | Status: ${prev} → ${next.status} (${next.detail}) | ` +
+      `Players: ${health.players} | Latency: ${health.latencyMs ?? '-'}ms | Base: ${health.base || '-'}`;
     if (next.status === 'LIVE') logger.success(line);
     else logger.warn(line);
   }
 }
 
-function pickHostname(dynamic, info, snapshot) {
-  return dynamic?.hostname || info?.hostname || snapshot?.hostname || null;
+// Ağ kaynaklı türler: connect fallback denemeye değer + OFFLINE sınıfı.
+const NETWORK_KINDS = new Set(['timeout', 'unreachable', 'connection_refused', 'dns_error', 'connection_reset']);
+
+/** Geliştirici logu: URL (redakte), süre, status, kind, snippet. Token ASLA yazılmaz. */
+function logFetchError(where, base, path, r) {
+  const url = client.redactUrl(`${base}${path}`);
+  const extra = r.snippet ? ` | body: ${JSON.stringify(r.snippet)}` : '';
+  logger.warn(
+    `FiveM ${where} 실패 → ${client.describeKind(r.kind, r.status)} | URL: ${url} | ` +
+      `Elapsed: ${r.ms}ms | HTTP: ${r.status ?? '-'}${extra}`,
+  );
 }
 
-function pickMaxClients(dynamic, info, snapshot) {
-  return dynamic?.maxClients ?? info?.maxClients ?? snapshot?.maxClients ?? null;
+function pickHostname(dynamic, fallbackHostname) {
+  return dynamic?.hostname || fallbackHostname || null;
+}
+
+function pickMaxClients(dynamic) {
+  return dynamic?.maxClients ?? null;
 }
 
 /**
  * Tam sunucu sorgusu. Asla throw etmez.
- * @returns {Promise<object>} query sonucu (yukarıdaki şema)
  */
 async function queryServer() {
   const t0 = Date.now();
-  const resolved = await client.resolveEndpoint();
-  if (!resolved.base) {
+  const { primary, fallback } = client.resolveBases();
+  if (!primary) {
     const out = {
       status: 'OFFLINE',
       detail: 'no_endpoint',
@@ -72,124 +91,101 @@ async function queryServer() {
       hostname: null,
       onlineCount: null,
       maxClients: null,
+      serverReported: null,
       latencyMs: Date.now() - t0,
-      listSnapshot: null,
       base: null,
+      baseSource: null,
     };
-    setHealth({ status: 'OFFLINE', detail: 'no_endpoint', players: 0, latencyMs: out.latencyMs, source: null });
+    setHealth({ status: 'OFFLINE', detail: 'no_endpoint', players: 0, latencyMs: out.latencyMs, source: null, base: null, lastError: 'NO_ENDPOINT' });
     return out;
   }
 
-  const base = resolved.base;
-
-  // Sıralı + az istek: önce players.json (zorunlu). dynamic.json sadece
-  // hostname/sayı için best-effort ikinci istek. Paralel burst, filtreli
-  // sunucularda tüm istekleri düşürdüğü için BİLEREK yapılmaz.
-  // info.json hot path'te çağrılmaz (embed'lerde kullanılmıyor).
-  const safeGet = async (fn) => {
+  // --- players.json: primary'de dene; ağ-hatası + explicit fallback varsa oraya geç ---
+  const tried = [primary, ...(fallback ? [fallback] : [])];
+  let pRes = null;
+  let usedBase = primary.base;
+  let usedSource = primary.source;
+  for (const c of tried) {
+    let r = null;
     try {
-      return await fn();
+      r = await client.getPlayersRaw(c.base);
     } catch {
-      return { ok: false, kind: 'unreachable', ms: 0, data: null };
+      r = { ok: false, kind: 'unreachable', status: null, ms: 0, data: null, snippet: null };
     }
-  };
-  const pRes = await safeGet(() => client.getPlayersRaw(base));
-  let dRes = { ok: false, kind: 'skipped', ms: 0, data: null };
-  if (pRes.ok) {
-    // LIVE yolunda meta için best-effort
-    dRes = await safeGet(() => client.getDynamicRaw(base));
-  } else if (pRes.kind === 'forbidden' || pRes.kind === 'not_found' || pRes.kind === 'rate_limited' || pRes.kind === 'invalid_json') {
-    // PARTIAL ayrımı için tek şans: dynamic erişilebilir mi?
-    dRes = await safeGet(() => client.getDynamicRaw(base));
+    if (r.ok || !NETWORK_KINDS.has(r.kind) || c === tried[tried.length - 1]) {
+      pRes = r;
+      usedBase = c.base;
+      usedSource = c.source;
+      if (!r.ok) logFetchError('players', c.base, '/players.json', r);
+      if (c !== tried[0]) logger.info(`FiveM connect fallback kullanıldı: ${c.base} (${c.source})`);
+      break;
+    }
+    logFetchError('players', c.base, '/players.json', r);
+    logger.info(`FiveM primary erişilemedi, connect fallback deneniyor (${c.source} → devam)`);
+  }
+
+  // --- dynamic.json: best-effort (LIVE metası veya PARTIAL ayrımı için) ---
+  let dRes = { ok: false, kind: 'skipped', status: null, ms: 0, data: null, snippet: null };
+  const needDynamic =
+    pRes.ok || pRes.kind === 'forbidden' || pRes.kind === 'not_found' || pRes.kind === 'rate_limited' || pRes.kind === 'invalid_json';
+  if (needDynamic && usedBase) {
+    try {
+      dRes = await client.getDynamicRaw(usedBase);
+    } catch {
+      dRes = { ok: false, kind: 'unreachable', status: null, ms: 0, data: null, snippet: null };
+    }
+    if (!dRes.ok && dRes.kind !== 'skipped') logFetchError('dynamic', usedBase, '/dynamic.json', dRes);
   }
   const latencyMs = Date.now() - t0;
 
   const dynamic = dRes.ok ? parser.parseDynamic(dRes.data) : null;
-  const info = null;
-  const snapshot = resolved.snapshot || null;
-  const hostname = pickHostname(dynamic, info, snapshot);
-  const maxClients = pickMaxClients(dynamic, info, snapshot);
+  const hostname = pickHostname(dynamic, null);
+  const maxClients = pickMaxClients(dynamic);
 
-  // --- players BAŞARILI → LIVE (dynamic/info eksikliği sorun değil, §50) ---
+  const baseHealth = { latencyMs, source: usedSource, base: usedBase };
+
+  // --- players BAŞARILI → LIVE ---
   if (pRes.ok) {
     const parsed = parser.parsePlayers(pRes.data);
     if (!parsed.ok) {
       const out = {
-        status: 'ERROR',
-        detail: 'invalid_players',
-        players: null,
-        playersSkipped: 0,
-        dynamic,
-        info,
-        hostname,
-        onlineCount: null,
-        maxClients,
-        latencyMs,
-        listSnapshot: snapshot,
-        base,
+        status: 'ERROR', detail: 'invalid_players', players: null, playersSkipped: 0,
+        dynamic, info: null, hostname, onlineCount: null, maxClients,
+        serverReported: dynamic?.clients ?? null, latencyMs, base: usedBase, baseSource: usedSource,
       };
-      setHealth({ status: 'ERROR', detail: 'invalid_players', latencyMs, source: 'direct' });
+      setHealth({ ...baseHealth, status: 'ERROR', detail: 'invalid_players', players: 0, lastError: 'INVALID_PLAYERS_BODY' });
       return out;
     }
+    const serverReported = dynamic?.clients ?? null;
     const out = {
-      status: 'LIVE',
-      detail: 'ok',
-      players: parsed.players,
-      playersSkipped: parsed.skipped,
-      dynamic,
-      info,
-      hostname,
-      onlineCount: parsed.players.length,
-      maxClients,
-      latencyMs,
-      listSnapshot: snapshot,
-      base,
+      status: 'LIVE', detail: 'ok', players: parsed.players, playersSkipped: parsed.skipped,
+      dynamic, info: null, hostname, onlineCount: parsed.players.length, maxClients,
+      serverReported: serverReported !== null && serverReported !== parsed.players.length ? serverReported : null,
+      latencyMs, base: usedBase, baseSource: usedSource,
     };
-    setHealth({ status: 'LIVE', detail: 'ok', players: parsed.players.length, latencyMs, source: 'direct' });
+    setHealth({ ...baseHealth, status: 'LIVE', detail: 'ok', players: parsed.players.length });
     return out;
   }
 
   // --- players BAŞARISIZ ---
   const kind = pRes.kind;
-  // Sunucu erişilebilir (dynamic/info OK) ama liste alınamıyor → PARTIAL (§50)
-  const reachable = dynamic !== null || info !== null;
-  if (reachable && (kind === 'forbidden' || kind === 'not_found' || kind === 'rate_limited' || kind === 'invalid_json')) {
+  if ((kind === 'forbidden' || kind === 'not_found' || kind === 'rate_limited' || kind === 'invalid_json') && dynamic) {
     const out = {
-      status: 'PARTIAL',
-      detail: kind,
-      players: null,
-      playersSkipped: 0,
-      dynamic,
-      info,
-      hostname,
-      onlineCount: dynamic?.clients ?? snapshot?.clients ?? null,
-      maxClients,
-      latencyMs,
-      listSnapshot: snapshot,
-      base,
+      status: 'PARTIAL', detail: kind, players: null, playersSkipped: 0,
+      dynamic, info: null, hostname, onlineCount: dynamic.clients, maxClients,
+      serverReported: null, latencyMs, base: usedBase, baseSource: usedSource,
     };
-    setHealth({ status: 'PARTIAL', detail: kind, players: dynamic?.clients ?? 0, latencyMs, source: 'direct' });
+    setHealth({ ...baseHealth, status: 'PARTIAL', detail: kind, players: dynamic.clients ?? 0, lastError: client.describeKind(kind, pRes.status) });
     return out;
   }
 
-  const offlineKinds = new Set(['timeout', 'unreachable', 'server_error', 'bad_status']);
-  const status = offlineKinds.has(kind) ? 'OFFLINE' : 'ERROR';
+  const status = NETWORK_KINDS.has(kind) ? 'OFFLINE' : 'ERROR';
   const out = {
-    status,
-    detail: kind,
-    players: null,
-    playersSkipped: 0,
-    dynamic,
-    info,
-    hostname,
-    // OFFLINE/ERROR'da isim listesi YOK; sayı sadece dynamic/info'dan gelirse bilgi amaçlı
-    onlineCount: dynamic?.clients ?? null,
-    maxClients,
-    latencyMs,
-    listSnapshot: snapshot,
-    base,
+    status, detail: kind, players: null, playersSkipped: 0,
+    dynamic, info: null, hostname, onlineCount: dynamic?.clients ?? null, maxClients,
+    serverReported: null, latencyMs, base: usedBase, baseSource: usedSource,
   };
-  setHealth({ status, detail: kind, players: 0, latencyMs, source: 'direct' });
+  setHealth({ ...baseHealth, status, detail: kind, players: 0, lastError: `${client.describeKind(kind, pRes.status)} @ ${usedBase}` });
   return out;
 }
 
@@ -209,15 +205,89 @@ async function searchPlayers(term) {
   return { query: q, term, matches };
 }
 
+// ---------- Tekil kaynak getter'ları (§26) — önbellek farkında ----------
+
+async function currentBase() {
+  const { primary } = client.resolveBases();
+  return primary || { base: null, source: null };
+}
+
+async function getPlayers() {
+  const { base } = await currentBase();
+  if (!base) return { ok: false, kind: 'no_endpoint', players: [], skipped: 0 };
+  let r = null;
+  try {
+    r = await client.getPlayersRaw(base);
+  } catch {
+    r = { ok: false, kind: 'unreachable' };
+  }
+  if (!r.ok) {
+    logFetchError('players', base, '/players.json', r);
+    return { ok: false, kind: r.kind, players: [], skipped: 0 };
+  }
+  const parsed = parser.parsePlayers(r.data);
+  return { ok: parsed.ok, kind: parsed.ok ? 'ok' : 'invalid_players', players: parsed.players, skipped: parsed.skipped };
+}
+
+async function getDynamic() {
+  const { base } = await currentBase();
+  if (!base) return { ok: false, kind: 'no_endpoint', dynamic: null };
+  let r = null;
+  try {
+    r = await client.getDynamicRaw(base);
+  } catch {
+    r = { ok: false, kind: 'unreachable' };
+  }
+  if (!r.ok) {
+    logFetchError('dynamic', base, '/dynamic.json', r);
+    return { ok: false, kind: r.kind, dynamic: null };
+  }
+  return { ok: true, kind: 'ok', dynamic: parser.parseDynamic(r.data) };
+}
+
+async function getInfo() {
+  const { base } = await currentBase();
+  if (!base) return { ok: false, kind: 'no_endpoint', info: null };
+  let r = null;
+  try {
+    r = await client.getInfoRaw(base);
+  } catch {
+    r = { ok: false, kind: 'unreachable' };
+  }
+  if (!r.ok) {
+    logFetchError('info', base, '/info.json', r);
+    return { ok: false, kind: r.kind, info: null };
+  }
+  return { ok: true, kind: 'ok', info: parser.parseInfo(r.data) };
+}
+
+/**
+ * Katmanlı endpoint sağlığı (/fivemstatus + geliştirici teşhisi).
+ * DNS → TCP → HTTP(info/dynamic/players) + JSON parse, hepsi ayrı raporlanır.
+ */
+async function getEndpointHealth() {
+  const { base, source } = await currentBase();
+  if (!base) {
+    return { base: null, source: null, host: null, port: null, dns: null, tcp: null, endpoints: {}, ms: 0 };
+  }
+  const t0 = Date.now();
+  const diag = await client.diagnoseBase(base);
+  return { ...diag, source, ms: Date.now() - t0 };
+}
+
 function getHealth() {
   const stale = health.lastGoodAt > 0 && Date.now() - health.lastGoodAt > config.fivem.cacheTtlMs * 3;
-  return { ...health, stale, cfxId: config.fivem.cfxId };
+  return { ...health, stale, cfxId: config.fivem.cfxId, host: config.fivem.host, port: config.fivem.port };
 }
 
 module.exports = {
   queryServer,
   findPlayerById,
   searchPlayers,
+  getPlayers,
+  getDynamic,
+  getInfo,
+  getEndpointHealth,
   getHealth,
   STATUS: { LIVE: 'LIVE', PARTIAL: 'PARTIAL', OFFLINE: 'OFFLINE', ERROR: 'ERROR', STALE: 'STALE' },
 };

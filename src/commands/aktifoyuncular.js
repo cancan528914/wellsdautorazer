@@ -43,6 +43,7 @@ module.exports = {
           onlineCount: q.onlineCount,
           maxClients: q.maxClients,
           latencyMs: q.latencyMs,
+          serverReported: q.serverReported,
           page: 1,
         };
         const total = pagination.totalPagesFor(q.players.length);
@@ -73,7 +74,7 @@ module.exports = {
         });
       }
 
-      return interaction.editReply({ embeds: [buildErrorEmbed(errorTextFor(q))] });
+      return interaction.editReply({ embeds: [buildErrorEmbed(errorTextFor(q, q.base))] });
     } catch (err) {
       logger.error('Interaction failed: /aktifoyuncular.', err);
       const payload = { embeds: [buildErrorEmbed('Sorgu sırasında bir hata oluştu.')] };

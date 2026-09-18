@@ -42,6 +42,7 @@ module.exports = {
               onlineCount: query.onlineCount,
               maxClients: query.maxClients,
               latencyMs: query.latencyMs,
+              base: query.base,
             }),
           ],
         });
@@ -65,7 +66,7 @@ module.exports = {
           content: `⚠️ **Oyuncu listesi şu anda alınamıyor.**\nSunucu online görünüyor (${query.hostname || 'bilinmiyor'}) ama \`ID ${id}\` doğrulanamadı. Biraz bekleyip tekrar deneyin.`,
         });
       }
-      return interaction.editReply({ embeds: [buildErrorEmbed(errorTextFor(query))] });
+      return interaction.editReply({ embeds: [buildErrorEmbed(errorTextFor(query, query.base))] });
     } catch (err) {
       logger.error('Interaction failed: /id.', err);
       const payload = { embeds: [buildErrorEmbed('Sorgu sırasında bir hata oluştu.')] };

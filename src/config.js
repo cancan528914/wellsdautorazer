@@ -204,26 +204,41 @@ const config = {
 
   // --- FiveM canlı oyuncu sorgu ---
   // Veri HER ZAMAN doğrudan oyun sunucusundan (/players.json, /dynamic.json, /info.json) alınır.
-  // Server-list API'si (frontend.cfx-services.net — resmi SPA'nın kullandığı host) SADECE
-  // CFX kodundan IP:port çözümlemek için kullanılır; FIVEM_SERVER_ENDPOINT doluysa hiç çağrılmaz.
+  // PRIMARY: http://FIVEM_SERVER_HOST:FIVEM_SERVER_PORT (varsayılan 5.231.120.202:30120).
+  // FIVEM_SERVER_ENDPOINT doluysa en yüksek öncelik onundur. CFX ID sadece metadata'dır
+  // (footer/link); oyuncu verisi için kullanılmaz, HTML scraping yoktur.
   fivem: {
     cfxId: (process.env.FIVEM_CFX_ID || '8emv3b3').trim() || '8emv3b3',
-    // Doğrudan oyun sunucusu adresi. Örn: FIVEM_SERVER_ENDPOINT=http://85.104.10.20:30120
-    // Boşsa CFX kodundan otomatik çözümlenir (önbelleğe alınır).
+    // Ana oyun sunucusu host/port (varsayılan: 5.231.120.202:30120). Kodun hiçbir yerinde
+    // IP:port hard-code YOKTUR — tek kaynak burasıdır.
+    host: (process.env.FIVEM_SERVER_HOST || '5.231.120.202').trim() || '5.231.120.202',
+    port: (() => {
+      const n = int('FIVEM_SERVER_PORT', 30120);
+      return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : 30120;
+    })(),
+    // Tam adres override (en yüksek öncelik). Örn: FIVEM_SERVER_ENDPOINT=http://85.104.10.20:30120
     endpoint: (process.env.FIVEM_SERVER_ENDPOINT || '').trim() || null,
-    // Tek HTTP isteği zaman aşımı (ms). Aralık dışındaysa güvenli aralığa çekilir.
-    // Oyun sunucuları normalde <500ms cevap verir; 5000ms + 1 retry = en kötü ~10.5sn.
+    // Connect endpoint primary'den farklıysa fallback adayı (örn. proxy arkası kurulumlar).
+    // Boşsa kullanılmaz; rastgele fallback YOKTUR.
+    connectEndpoint: (process.env.FIVEM_CONNECT_ENDPOINT || '').trim() || null,
+    // sv_playersToken kullanılıyorsa istekler X-Players-Token header ile imzalanır.
+    // Token ASLA loga/URL'e/embed'e yazılmaz.
+    playersToken: (process.env.FIVEM_PLAYERS_TOKEN || '').trim() || null,
+    // Tek HTTP isteği zaman aşımı (ms, 2000-30000). Önerilen: 5000-8000.
     apiTimeoutMs: (() => {
-      const n = int('FIVEM_API_TIMEOUT_MS', 5000);
+      const n = int('FIVEM_API_TIMEOUT_MS', 7000);
       return Math.min(30000, Math.max(2000, n));
     })(),
-    // Oyuncu/sunucu verisi önbellek süresi (ms). Komutlar "canlı"dır; uzun tutmayın.
+    // Genel kaynak önbellek süresi (ms). Komutlar "canlı"dır; uzun tutmayın.
     cacheTtlMs: (() => {
       const n = int('FIVEM_CACHE_TTL_MS', 4000);
       return Math.min(30000, Math.max(1000, n));
     })(),
-    // Endpoint çözümleme sonucu önbellek süresi (ms). IP:port nadiren değişir.
-    resolveTtlMs: 60 * 60 * 1000,
+    // Oyuncu listesi önbellek süresi (ms) — daha kısa tutulur.
+    playersCacheTtlMs: (() => {
+      const n = int('FIVEM_PLAYERS_CACHE_TTL_MS', 3000);
+      return Math.min(30000, Math.max(1000, n));
+    })(),
     pageSize: 10, // pagination: sayfa başına oyuncu
     sessionTtlMs: 10 * 60 * 1000, // pagination buton oturumu ömrü
   },

@@ -8,31 +8,40 @@ const config = require('../config');
 const { FIRST, PREV, NEXT, LAST, pageSlice } = require('../services/fivem/pagination');
 
 /**
- * Sorgu hatası için kullanıcı dostu metin (teknik detay YOK — spec §22, §48).
- * @param {{status:string, detail:string}} query
+ * Sorgu hatası için kullanıcı dostu metin — hata türüne göre AYRI mesaj (§9, §10, §30).
+ * Teknik detay YOK; sunucu adresi bilgi amaçlı eklenir.
+ * @param {{status:string, detail:string, base?:string}} query
+ * @param {string} [base]
  */
-function errorTextFor(query) {
+function errorTextFor(query, base) {
   const d = query?.detail || 'unknown';
+  const b = shortBase(base || query?.base);
+  const srv = b ? `\n\nSunucu:\n\`${b}\`` : '';
   if (d === 'no_endpoint') {
-    return '❌ **FiveM sunucusuna bağlanılamadı.**\nSunucu adresi çözülemedi. Bir yetkili `FIVEM_SERVER_ENDPOINT` değerini kontrol etmeli.';
+    return `❌ **FiveM sunucusuna bağlanılamadı.**\nSunucu adresi oluşturulamadı. Bir yetkili \`FIVEM_SERVER_HOST\` / \`FIVEM_SERVER_PORT\` değerlerini kontrol etmeli.${srv}`;
   }
   if (d === 'timeout') {
-    return '⚠️ **FiveM sunucusundan zamanında cevap alınamadı.**\nLütfen biraz bekleyip tekrar deneyin.';
+    return `⚠️ **FiveM sunucusu zamanında cevap vermedi.**\nSunucu geç yanıt veriyor olabilir. Lütfen biraz bekleyip tekrar deneyin.${srv}`;
+  }
+  if (d === 'connection_refused' || d === 'dns_error' || d === 'connection_reset' || d === 'unreachable') {
+    return `❌ **FiveM sunucusuna bağlanılamadı.**${srv}\n\nDurum:\n🔴 Ulaşılamıyor`;
   }
   if (d === 'forbidden') {
-    return '⚠️ **FiveM sunucusu oyuncu listesi erişimini kısıtlamış (403).**\nListe herkese açık değil; sunucu yetkilisiyle görüşün.';
+    return `🔒 **FiveM sunucusu oyuncu endpointine erişimi engelliyor (403).**${srv}\n\nSunucuda \`sv_requestParanoia\` 2+ olabilir veya liste kısıtlıdır. Sunucu yetkilisiyle görüşün.`;
   }
   if (d === 'not_found') {
-    return '⚠️ **FiveM sorgu endpointi bulunamadı (404).**\nBir yetkili `FIVEM_SERVER_ENDPOINT` değerini kontrol etmeli.';
+    return `⚠️ **FiveM sorgu endpointi bulunamadı (404).**${srv}\n\nBir yetkili \`FIVEM_SERVER_PORT\` değerini kontrol etmeli.`;
   }
   if (d === 'rate_limited') {
-    return '⚠️ **FiveM sunucusu hız limiti uyguluyor (429).**\nLütfen biraz bekleyip tekrar deneyin.';
+    return `⏳ **FiveM sunucusu çok fazla istek aldı (429).**\nLütfen biraz bekleyip tekrar deneyin.${srv}`;
+  }
+  if (d === 'server_error' || d === 'bad_status') {
+    return `🔴 **FiveM sunucusu hata döndürdü (5xx).**${srv}\n\nLütfen daha sonra tekrar deneyin.`;
   }
   if (d === 'invalid_json' || d === 'invalid_players') {
-    return '⚠️ **FiveM oyuncu verisi okunamadı.**\nSunucu beklenmedik formatta cevap verdi.';
+    return `⚠️ **FiveM sunucusundan geçersiz oyuncu verisi geldi.**${srv}\n\nSunucu beklenmedik formatta cevap verdi.`;
   }
-  // timeout/unreachable/server_error/bad_status → OFFLINE
-  return '🔴 **FiveM sunucusu offline**\nSunucuya şu anda erişilemiyor. Lütfen daha sonra tekrar deneyin.';
+  return `🔴 **FiveM sunucusu offline**\nSunucuya şu anda erişilemiyor. Lütfen daha sonra tekrar deneyin.${srv}`;
 }
 
 /**
@@ -56,6 +65,7 @@ function buildPagedPayload(session, page, totalPages) {
       onlineCount: session.onlineCount,
       maxClients: session.maxClients,
       latencyMs: session.latencyMs,
+      serverReported: session.serverReported,
     });
   } else {
     embed = buildPlayerListEmbed({
@@ -70,6 +80,7 @@ function buildPagedPayload(session, page, totalPages) {
       onlineCount: session.onlineCount,
       maxClients: session.maxClients,
       latencyMs: session.latencyMs,
+      serverReported: session.serverReported,
     });
   }
   const row = buildPaginationRow(page, totalPages);
@@ -102,24 +113,34 @@ function serverLine(hostname) {
   return hostname ? `🎮 **${hostname}**` : '🎮 Sunucu adı alınamadı';
 }
 
+/** "http://5.231.120.202:30120" → "5.231.120.202:30120" (görüntü için). */
+function shortBase(base) {
+  if (!base) return null;
+  return String(base).replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+}
+
 /** Tek oyuncu satırı: "**3. Name**\nID: 12 • Ping: 31ms" */
 function playerLine(globalIndex, player) {
   return `**${globalIndex}. ${player.name}**\nID: ${player.id} • Ping: ${fmtPing(player.ping)}`;
 }
 
-/** /id bulundu */
-function buildPlayerEmbed({ player, hostname, onlineCount, maxClients, latencyMs }) {
-  return baseEmbed(ONLINE_GREEN)
+/** /id bulundu (§23: Server + FiveM alanları dahil) */
+function buildPlayerEmbed({ player, hostname, onlineCount, maxClients, latencyMs, base }) {
+  const embed = baseEmbed(ONLINE_GREEN)
     .setTitle('🎮 FIVE M OYUNCU SORGUSU')
     .setDescription(
-      `👤 **${player.name}**\n\n${serverLine(hostname)}\n🟢 **ONLINE** — Sunucuda aktif`,
+      `👤 **${player.name}**\n\n${serverLine(hostname)}\n🟢 **Durum:** Aktif`,
     )
     .addFields(
       { name: '🆔 Server ID', value: `\`${player.id}\``, inline: true },
       { name: '🏓 Ping', value: fmtPing(player.ping), inline: true },
-      { name: '👥 Online', value: fmtCount(onlineCount, maxClients), inline: true },
+      { name: '👥 Sunucu', value: fmtCount(onlineCount, maxClients), inline: true },
       { name: '⏱️ Sorgu', value: `${latencyMs}ms`, inline: true },
     );
+  const sb = shortBase(base);
+  if (sb) embed.addFields({ name: '🌐 Server', value: `\`${sb}\``, inline: true });
+  embed.addFields({ name: 'FiveM', value: `\`${config.fivem.cfxId}\``, inline: true });
+  return embed;
 }
 
 /** /id bulunamadı (public sonuç embed'i — spec §17) */
@@ -137,13 +158,17 @@ function buildPlayerNotFoundEmbed({ id, hostname, onlineCount, maxClients, laten
  * Sayfalı oyuncu listesi (/aktifoyuncular + /tag ortak).
  * kind: 'players' | 'tag'
  */
-function buildPlayerListEmbed({ kind, title, headerLines, players, page, totalPages, total, startIndex, onlineCount, maxClients, latencyMs }) {
+function buildPlayerListEmbed({ kind, title, headerLines, players, page, totalPages, total, startIndex, onlineCount, maxClients, latencyMs, serverReported }) {
   const lines = players.map((p, i) => playerLine(startIndex + i + 1, p));
   const head = [...headerLines, `📄 Sayfa **${page} / ${totalPages}** • Toplam **${total}**`].join('\n');
   const body = lines.length ? lines.join('\n\n') : '*Bu sayfada oyuncu yok.*';
   const embed = baseEmbed(FIVEM_ORANGE).setTitle(title).setDescription(`${head}\n\n────────────────\n\n${body}`);
   if (kind === 'players') {
     embed.addFields({ name: '👥 Aktif', value: fmtCount(onlineCount, maxClients), inline: true });
+    // dynamic.json farklı sayı bildirirse küçük bilgi satırı (§31) — liste her zaman players.json'dandır.
+    if (serverReported !== null && serverReported !== undefined && serverReported !== onlineCount) {
+      embed.addFields({ name: '📡 Sunucu Bildirimi', value: `${serverReported}`, inline: true });
+    }
   }
   embed.addFields({ name: '⏱️ Sorgu', value: `${latencyMs}ms`, inline: true });
   return embed;
@@ -200,6 +225,36 @@ function buildPaginationRow(page, totalPages) {
   );
 }
 
+/**
+ * /fivemstatus debug embed'i (§27). Teknik detay içerir (sadece yetkililere gösterilir).
+ * @param {object} h getEndpointHealth() sonucu
+ */
+function buildStatusEmbed(h) {
+  const ok = (v) => (v ? '✅' : '❌');
+  const ep = (e) => {
+    if (!e) return '—';
+    if (e.ok) return `✅ HTTP ${e.status} (${e.ms}ms)`;
+    return `❌ ${e.error || e.kind || '?'}${e.status ? ` (HTTP ${e.status})` : ''} (${e.ms}ms)`;
+  };
+  const pCount = h.endpoints?.['/players.json']?.summary;
+  const lines = [
+    `**Host:** \`${h.host || '?'}\``,
+    `**Port:** \`${h.port || '?'}\``,
+    '',
+    `**Info:** ${ep(h.endpoints?.['/info.json'])}`,
+    `**Dynamic:** ${ep(h.endpoints?.['/dynamic.json'])}`,
+    `**Players:** ${ep(h.endpoints?.['/players.json'])}`,
+    '',
+    `**Players:** ${pCount && typeof pCount.count === 'number' ? pCount.count : '—'}`,
+    `**Response:** ${h.ms}ms`,
+    `**Last Error:** \`${h.dns?.ok === false ? `DNS:${h.dns.error}` : h.tcp?.ok === false ? `TCP:${h.tcp.error}` : 'None'}\``,
+  ];
+  const anyOk = h.endpoints && Object.values(h.endpoints).some((e) => e?.ok);
+  return baseEmbed(anyOk ? ONLINE_GREEN : OFFLINE_RED)
+    .setTitle('🎮 FiveM Query Status')
+    .setDescription(lines.join('\n'));
+}
+
 module.exports = {
   FIVEM_ORANGE,
   ONLINE_GREEN,
@@ -207,6 +262,7 @@ module.exports = {
   fmtPing,
   fmtCount,
   playerLine,
+  shortBase,
   buildPlayerEmbed,
   buildPlayerNotFoundEmbed,
   buildPlayerListEmbed,
@@ -218,4 +274,5 @@ module.exports = {
   buildPaginationRow,
   errorTextFor,
   buildPagedPayload,
+  buildStatusEmbed,
 };

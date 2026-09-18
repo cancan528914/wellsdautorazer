@@ -44,6 +44,7 @@ module.exports = {
           onlineCount: query.onlineCount,
           maxClients: query.maxClients,
           latencyMs: query.latencyMs,
+          serverReported: query.serverReported,
           page: 1,
         };
         const total = pagination.totalPagesFor(matches.length);
@@ -72,7 +73,7 @@ module.exports = {
         });
       }
 
-      return interaction.editReply({ embeds: [buildErrorEmbed(errorTextFor(query))] });
+      return interaction.editReply({ embeds: [buildErrorEmbed(errorTextFor(query, query.base))] });
     } catch (err) {
       logger.error('Interaction failed: /tag.', err);
       const payload = { embeds: [buildErrorEmbed('Sorgu sırasında bir hata oluştu.')] };
