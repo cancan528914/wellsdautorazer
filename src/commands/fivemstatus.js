@@ -1,6 +1,7 @@
 /**
- * /fivemstatus — FiveM endpoint katmanlı sağlık teşhisi (sadece yetkililer, ephemeral).
- * DNS → TCP → HTTP(info/dynamic/players) → JSON aşamalarını ayrı raporlar (§27, §38, §39).
+ * /fivemstatus — FiveM sağlık teşhisi (sadece yetkililer, ephemeral).
+ * RCON (UDP) testi + direct HTTP teşhisi birbirinden bağımsız raporlanır.
+ * Parola ASLA gösterilmez (CONFIGURED/NOT SET).
  */
 const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { buildErrorEmbed } = require('../utils/embeds');

@@ -44,6 +44,25 @@ function errorTextFor(query, base) {
   if (d === 'anonymized') {
     return `🔒 **Oyuncu listesi anonimleştirilmiş.**${srv}\n\nGerçek liste için \`sv_playersToken\` + \`FIVEM_PLAYERS_TOKEN\` gerekir.`;
   }
+  // --- RCON detayları (§16, §38) ---
+  if (d === 'not_configured') {
+    return '⚠️ **FiveM sorgusu yapılandırılmamış.**\nRCON parolası eksik — sunucu sahibi `FIVEM_RCON_PASSWORD` değerini eklemeli (`set rcon_password` + `ensure rconlog`).';
+  }
+  if (d === 'rcon_timeout') {
+    return '⚠️ **FiveM sorgusu gerçekleştirilemedi.**\nReason:\nRCON connection timeout.';
+  }
+  if (d === 'rcon_unreachable') {
+    return `❌ **FiveM sunucusuna ulaşılamıyor (RCON/UDP).**${srv}\n\nReason:\nRCON unreachable.`;
+  }
+  if (d === 'server_offline') {
+    return `🔴 **FiveM sunucusu kapalı görünüyor (RCON/UDP).**${srv}\n\nReason:\nServer offline / port kapalı.`;
+  }
+  if (d === 'auth_failed') {
+    return '🔒 **RCON kimlik doğrulama başarısız.**\nParola yanlış olabilir veya sunucuda `rconlog` eksik. Sunucu sahibi kontrol etmeli.';
+  }
+  if (d === 'malformed' || d === 'rcon_error') {
+    return '⚠️ **FiveM sunucusundan geçersiz RCON yanıtı geldi.**\nLütfen daha sonra tekrar deneyin.';
+  }
   return `🔴 **FiveM sunucusu offline**\nSunucuya şu anda erişilemiyor. Lütfen daha sonra tekrar deneyin.${srv}`;
 }
 
@@ -116,10 +135,10 @@ function serverLine(hostname) {
   return hostname ? `🎮 **${hostname}**` : '🎮 Sunucu adı alınamadı';
 }
 
-/** "http://5.231.120.202:30120" → "5.231.120.202:30120" (görüntü için). */
+/** "http://5.231.120.202:30120" / "udp://..." → "5.231.120.202:30120" (görüntü için). */
 function shortBase(base) {
   if (!base) return null;
-  return String(base).replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  return String(base).replace(/^(https?|udp):\/\//i, '').replace(/\/+$/, '');
 }
 
 /** Tek oyuncu satırı: "**3. Name**\nID: 12 • Ping: 31ms" */
@@ -232,49 +251,65 @@ function buildPaginationRow(page, totalPages) {
  * /fivemstatus debug embed'i (§27). Teknik detay içerir (sadece yetkililere gösterilir).
  * @param {object} h getEndpointHealth() sonucu
  */
+/**
+ * /fivemstatus debug embed'i (§14, §27): RCON (PRIMARY) + direct HTTP (bağımsız).
+ * Parola ASLA gösterilmez — sadece CONFIGURED/NOT SET.
+ */
 function buildStatusEmbed(h) {
+  const r = h.rcon || {};
+  const t = r.test || null;
+  const rconLine = !r.configured
+    ? '❌ NOT CONFIGURED'
+    : !t
+      ? '—'
+      : t.ok
+        ? `✅ CONNECTED (${t.ms}ms)`
+        : `❌ ${t.error || t.kind || '?'} (${t.ms}ms)`;
+  const statusLine = !r.configured
+    ? '❌ NO PASSWORD'
+    : !t
+      ? '—'
+      : t.ok
+        ? '✅ OK'
+        : `❌ ${t.error || t.kind || '?'}`;
   const ep = (e) => {
     if (!e) return '—';
     if (e.ok) return `✅ HTTP ${e.status} (${e.ms}ms)`;
     return `❌ ${e.error || e.kind || '?'}${e.status ? ` (HTTP ${e.status})` : ''} (${e.ms}ms)`;
   };
-  const pCount = h.endpoints?.['/players.json']?.summary;
-  const firstEpFail = ['/info.json', '/dynamic.json', '/players.json']
-    .map((p) => ({ path: p, e: h.endpoints?.[p] }))
-    .find(({ e }) => e && !e.ok);
-  const lastError =
-    h.dns?.ok === false
-      ? `DNS:${h.dns.error}`
-      : h.tcp?.ok === false
-        ? `TCP:${h.tcp.error}`
-        : firstEpFail
-          ? `${firstEpFail.path}:${firstEpFail.e.error || firstEpFail.e.kind}`
-          : 'None';
-  const queryEmoji = h.queryStatus === 'LIVE' ? '🟢 ONLINE' : h.queryStatus === 'ANONYMIZED' ? '🟡 ANONYMIZED' : h.queryStatus === 'PARTIAL' ? '🟡 PARTIAL' : '🔴 OFFLINE/ERROR';
+  const http = h.http || {};
+  const queryEmoji =
+    h.queryStatus === 'LIVE'
+      ? '🟢 ONLINE'
+      : h.queryStatus === 'ANONYMIZED'
+        ? '🟡 ANONYMIZED'
+        : '🔴 OFFLINE/ERROR';
   const lines = [
-    `**Server:** \`${config.fivem.cfxId}\``,
-    `**Host:** \`${h.host || '?'}\``,
-    `**Port:** \`${h.port || '?'}\``,
+    `**CFX:** \`${h.cfxId || config.fivem.cfxId}\``,
+    `**RCON Host:** \`${r.host || '?'}\``,
+    `**RCON Port:** \`${r.port || '?'}\``,
+    `**Transport:** \`UDP\``,
     '',
     '────────────────',
     '',
-    `**TCP:** ${h.tcp ? (h.tcp.ok ? `✅ CONNECTED (${h.tcp.ms}ms)` : `❌ ${h.tcp.error} (${h.tcp.ms}ms)`) : '—'}`,
-    `**Info:** ${ep(h.endpoints?.['/info.json'])}`,
-    `**Dynamic:** ${ep(h.endpoints?.['/dynamic.json'])}`,
-    `**Players:** ${ep(h.endpoints?.['/players.json'])}`,
-    '',
-    `**Latency:** ${h.ms}ms`,
-    `**Players:** ${pCount && typeof pCount.count === 'number' ? pCount.count : '—'}`,
+    `**RCON:** ${rconLine}`,
+    `**STATUS:** ${statusLine}`,
+    `**Players:** ${t && typeof t.players === 'number' ? t.players : '—'}`,
+    `**Latency:** ${typeof h.ms === 'number' ? h.ms : '—'}ms`,
+    `**Query Source:** 🟢 RCON STATUS`,
+    `**Password:** ${r.configured ? '✅ CONFIGURED' : '❌ NOT SET'}`,
     '',
     '────────────────',
     '',
-    `**Players Token:** ${h.tokenConfigured ? '✅ CONFIGURED' : '❌ NOT SET'}`,
+    `**Direct HTTP:** ${http.base ? `\`${String(http.base).replace(/^https?:\/\//i, '')}\`` : '—'}`,
+    `**Info:** ${ep(http.endpoints?.['/info.json'])}`,
+    `**Dynamic:** ${ep(http.endpoints?.['/dynamic.json'])}`,
+    `**Players:** ${ep(http.endpoints?.['/players.json'])}`,
+    '',
     `**Query:** ${queryEmoji}${h.queryDetail && h.queryDetail !== 'init' ? ` (${h.queryDetail})` : ''}`,
-    `**Phase:** \`${h.phase || '—'}\``,
-    `**Last Error:** \`${lastError}\``,
   ];
-  const anyOk = h.endpoints && Object.values(h.endpoints).some((e) => e?.ok);
-  return baseEmbed(anyOk ? ONLINE_GREEN : OFFLINE_RED)
+  const okAll = t?.ok;
+  return baseEmbed(okAll ? ONLINE_GREEN : OFFLINE_RED)
     .setTitle('🎮 FiveM Query Status')
     .setDescription(lines.join('\n'));
 }

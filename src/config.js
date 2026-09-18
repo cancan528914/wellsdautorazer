@@ -239,6 +239,28 @@ const config = {
       const n = int('FIVEM_PLAYERS_CACHE_TTL_MS', 3000);
       return Math.min(30000, Math.max(1000, n));
     })(),
+    // --- FiveM RCON (UDP) — oyuncu sorgularının PRIMARY kaynağı ---
+    // HTTP player endpointleri kapalı olsa bile RCON üzerinden çalışır.
+    // Parola ASLA koda yazılmaz; sadece FIVEM_RCON_PASSWORD env'den okunur.
+    rcon: {
+      host: (process.env.FIVEM_RCON_HOST || '5.231.120.202').trim() || '5.231.120.202',
+      port: (() => {
+        const n = int('FIVEM_RCON_PORT', 30120);
+        return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : 30120;
+      })(),
+      // Boşsa RCON kapalı sayılır (FiveM: rcon_password yoksa RCon devre dışı).
+      password: (process.env.FIVEM_RCON_PASSWORD || '').trim() || null,
+      // Tek istek zaman aşımı (ms, 2000-15000). UDP'dir; kayıp pakette retry olur.
+      timeoutMs: (() => {
+        const n = int('FIVEM_RCON_TIMEOUT_MS', 5000);
+        return Math.min(15000, Math.max(2000, n));
+      })(),
+      // status yanıtı önbelleği (ms, 1000-10000). Kısa tutulur (canlı veri).
+      cacheTtlMs: (() => {
+        const n = int('FIVEM_RCON_CACHE_TTL_MS', 2500);
+        return Math.min(10000, Math.max(1000, n));
+      })(),
+    },
     // Ardışık oyun-sunucusu istekleri arası bekleme (ms). Burst korumalı
     // sunucularda art arda istekler IP bloklatabildiği için konur (0 kapatır).
     requestGapMs: (() => {

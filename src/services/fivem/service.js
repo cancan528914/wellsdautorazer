@@ -20,6 +20,8 @@ const config = require('../../config');
 const logger = require('../../utils/logger');
 const client = require('./client');
 const parser = require('./parser');
+const rcon = require('./rcon');
+const rconParser = require('./rconParser');
 
 const health = {
   status: 'UNKNOWN',
@@ -54,9 +56,6 @@ function setHealth(next) {
   }
 }
 
-// Ağ kaynaklı türler: connect fallback denemeye değer + OFFLINE sınıfı.
-const NETWORK_KINDS = new Set(['timeout', 'unreachable', 'connection_refused', 'dns_error', 'connection_reset']);
-
 /** Geliştirici logu: URL (redakte), süre, status, kind, snippet. Token ASLA yazılmaz. */
 function logFetchError(where, base, path, r) {
   const url = client.redactUrl(`${base}${path}`);
@@ -67,14 +66,8 @@ function logFetchError(where, base, path, r) {
   );
 }
 
-function pickHostname(dynamic, fallbackHostname) {
-  return dynamic?.hostname || fallbackHostname || null;
-}
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// Negatif sonuç önbelleği: OFFLINE/ERROR/PARTIAL bu süre boyunca sunucuya
-// tekrar sorulmadan aynı mesajla döner (komut spam'i blok uzatamaz).
+// Negatif sonuç önbelleği: OFFLINE/ERROR bu süre boyunca hedefe tekrar
+// sorulmadan aynı mesajla döner (komut spam'i karşı tarafı yormaz).
 let lastFailure = null; // { at, base, out }
 
 /** Base değişmedikçe taze sayılan negatif sonuç varsa döndürür. */
@@ -92,143 +85,107 @@ function negStore(base, out) {
   lastFailure = { at: Date.now(), base, out };
 }
 
-function pickMaxClients(dynamic) {
-  return dynamic?.maxClients ?? null;
+/** RCON status metninden hostname çıkarmaya çalışır (yoksa null). */
+function extractRconHostname(text) {
+  try {
+    const m = String(text || '').match(/^hostname\s*:\s*(.+?)\s*$/im);
+    if (m && m[1]) return m[1].trim().slice(0, 128) || null;
+  } catch {}
+  return null;
+}
+
+/** RCON kind → { status, detail } eşlemesi (§16). */
+function mapRconKind(kind) {
+  switch (kind) {
+    case 'timeout':
+      return { status: 'OFFLINE', detail: 'rcon_timeout' };
+    case 'unreachable':
+    case 'dns_error':
+      return { status: 'OFFLINE', detail: 'rcon_unreachable' };
+    case 'server_offline':
+      return { status: 'OFFLINE', detail: 'server_offline' };
+    case 'auth_failed':
+      return { status: 'ERROR', detail: 'auth_failed' };
+    case 'malformed':
+      return { status: 'ERROR', detail: 'malformed' };
+    case 'not_configured':
+    case 'bad_password':
+      return { status: 'ERROR', detail: 'not_configured' };
+    default:
+      return { status: 'ERROR', detail: 'rcon_error' };
+  }
 }
 
 /**
- * Tam sunucu sorgusu. Asla throw etmez.
+ * Tam sunucu sorgusu — PRIMARY: RCON (UDP) `status` (§1).
+ * HTTP player endpointlerine düşülmez (§32). Asla throw etmez.
+ * İmza eskisiyle aynıdır → /id, /tag, /aktifoyuncular değişmeden çalışır.
  */
 async function queryServer() {
   const t0 = Date.now();
-  const { primary, fallback } = client.resolveBases();
-  // Negatif önbellek: kısa süre önce başarısız olan base'e tekrar sorulmaz.
-  if (primary) {
-    const neg = negCached(primary.base);
-    if (neg) return neg;
-  }
-  if (!primary) {
-    const out = {
-      status: 'OFFLINE',
-      detail: 'no_endpoint',
-      players: null,
-      playersSkipped: 0,
-      dynamic: null,
-      info: null,
-      hostname: null,
-      onlineCount: null,
-      maxClients: null,
-      serverReported: null,
-      latencyMs: Date.now() - t0,
-      base: null,
-      baseSource: null,
-    };
-    setHealth({ status: 'OFFLINE', detail: 'no_endpoint', players: 0, latencyMs: out.latencyMs, source: null, base: null, lastError: 'NO_ENDPOINT' });
+  const rHost = String(config.fivem.rcon.host || '').trim() || '5.231.120.202';
+  const rPort = Number(config.fivem.rcon.port) || 30120;
+  const rBase = `udp://${rHost}:${rPort}`;
+  // Negatif önbellek: kısa süre önce başarısız olan hedefe tekrar sorulmaz.
+  const neg = negCached(rBase);
+  if (neg) return neg;
+
+  const baseOut = {
+    players: null, playersSkipped: 0, dynamic: null, info: null,
+    hostname: null, onlineCount: null, maxClients: null, serverReported: null,
+    latencyMs: 0, base: rBase, baseSource: 'rcon_status',
+  };
+  const fail = (status, detail, lastError) => {
+    const out = { ...baseOut, status, detail, latencyMs: Date.now() - t0 };
+    setHealth({ status, detail, players: 0, latencyMs: out.latencyMs, source: 'rcon_status', base: rBase, lastError });
+    negStore(rBase, out);
     return out;
+  };
+
+  // Parola yoksa RCON kapalıdır (FiveM kuralı) → ağa hiç çıkmadan dürüst hata.
+  if (!config.fivem.rcon.password) {
+    logger.warn('FiveM RCON parolası yok (FIVEM_RCON_PASSWORD) — oyuncu sorgusu yapılamıyor.');
+    return fail('ERROR', 'not_configured', 'RCON_NOT_CONFIGURED');
   }
 
-  // --- players.json: primary'de dene; ağ-hatası + explicit fallback varsa oraya geç ---
-  const tried = [primary, ...(fallback ? [fallback] : [])];
-  let pRes = null;
-  let usedBase = primary.base;
-  let usedSource = primary.source;
-  for (const c of tried) {
-    let r = null;
-    try {
-      r = await client.getPlayersRaw(c.base);
-    } catch {
-      r = { ok: false, kind: 'unreachable', status: null, ms: 0, data: null, snippet: null };
-    }
-    if (r.ok || !NETWORK_KINDS.has(r.kind) || c === tried[tried.length - 1]) {
-      pRes = r;
-      usedBase = c.base;
-      usedSource = c.source;
-      if (!r.ok) logFetchError('players', c.base, '/players.json', r);
-      if (c !== tried[0]) logger.info(`FiveM connect fallback kullanıldı: ${c.base} (${c.source})`);
-      break;
-    }
-    logFetchError('players', c.base, '/players.json', r);
-    logger.info(`FiveM primary erişilemedi, connect fallback deneniyor (${c.source} → devam)`);
-  }
-
-  // --- dynamic.json: best-effort (LIVE metası veya PARTIAL ayrımı için) ---
-  let dRes = { ok: false, kind: 'skipped', status: null, ms: 0, data: null, snippet: null };
-  const needDynamic =
-    pRes.ok || pRes.kind === 'forbidden' || pRes.kind === 'not_found' || pRes.kind === 'rate_limited' || pRes.kind === 'invalid_json';
-  if (needDynamic && usedBase) {
-    // Burst korumasına karşı pacing: art arda istekler arasına nefes payı.
-    const gap = config.fivem.requestGapMs;
-    if (gap > 0) await sleep(gap);
-    try {
-      dRes = await client.getDynamicRaw(usedBase);
-    } catch {
-      dRes = { ok: false, kind: 'unreachable', status: null, ms: 0, data: null, snippet: null };
-    }
-    if (!dRes.ok && dRes.kind !== 'skipped') logFetchError('dynamic', usedBase, '/dynamic.json', dRes);
+  let r = null;
+  try {
+    r = await rcon.status();
+  } catch (err) {
+    logger.error('RCON status beklenmedik hata.', err);
+    return fail('ERROR', 'rcon_error', 'RCON_EXCEPTION');
   }
   const latencyMs = Date.now() - t0;
 
-  const dynamic = dRes.ok ? parser.parseDynamic(dRes.data) : null;
-  const hostname = pickHostname(dynamic, null);
-  const maxClients = pickMaxClients(dynamic);
-
-  const baseHealth = { latencyMs, source: usedSource, base: usedBase };
-
-  // --- players BAŞARILI ---
-  if (pRes.ok) {
-    const parsed = parser.parsePlayers(pRes.data);
-    // ANONYMIZED: liste placeholder (id:0/Player) → gerçek isimler için token gerekir (§26 TEST F).
-    if (parsed.ok && parsed.anonymized) {
-      const out = {
-        status: 'ANONYMIZED', detail: 'anonymized', players: [], playersSkipped: 0,
-        dynamic, info: null, hostname, onlineCount: dynamic?.clients ?? null, maxClients,
-        serverReported: null, latencyMs, base: usedBase, baseSource: usedSource,
-      };
-      setHealth({ ...baseHealth, status: 'ANONYMIZED', detail: 'anonymized', players: dynamic?.clients ?? 0, lastError: 'PUBLIC_ANONYMIZED' });
-      return out;
-    }
-    if (!parsed.ok) {
-      const out = {
-        status: 'ERROR', detail: 'invalid_players', players: null, playersSkipped: 0,
-        dynamic, info: null, hostname, onlineCount: null, maxClients,
-        serverReported: dynamic?.clients ?? null, latencyMs, base: usedBase, baseSource: usedSource,
-      };
-      setHealth({ ...baseHealth, status: 'ERROR', detail: 'invalid_players', players: 0, lastError: 'INVALID_PLAYERS_BODY' });
-      negStore(primary.base, out);
-      return out;
-    }
-    const serverReported = dynamic?.clients ?? null;
-    const out = {
-      status: 'LIVE', detail: 'ok', players: parsed.players, playersSkipped: parsed.skipped,
-      dynamic, info: null, hostname, onlineCount: parsed.players.length, maxClients,
-      serverReported: serverReported !== null && serverReported !== parsed.players.length ? serverReported : null,
-      latencyMs, base: usedBase, baseSource: usedSource,
-    };
-    setHealth({ ...baseHealth, status: 'LIVE', detail: 'ok', players: parsed.players.length });
+  if (!r.ok) {
+    const m = mapRconKind(r.kind);
+    // Geliştirici logu: host/port/command/latency/error — PAROLA YOK (§38).
+    logger.warn(
+      `FiveM RCON başarısız → ${r.kind} | Host: ${rHost} | Port: ${rPort} | ` +
+        `Transport: UDP | Command: status | Elapsed: ${r.ms}ms`,
+    );
+    const out = { ...baseOut, status: m.status, detail: m.detail, latencyMs };
+    setHealth({ status: m.status, detail: m.detail, players: 0, latencyMs, source: 'rcon_status', base: rBase, lastError: `RCON_${r.kind.toUpperCase()}` });
+    negStore(rBase, out);
     return out;
   }
 
-  // --- players BAŞARISIZ ---
-  const kind = pRes.kind;
-  if ((kind === 'forbidden' || kind === 'not_found' || kind === 'rate_limited' || kind === 'invalid_json') && dynamic) {
+  // Başarılı yanıt → parse. Boş yanıt = 0 oyunculu LIVE (TEST 9).
+  const parsed = rconParser.parseStatus(r.text || '');
+  const hostname = extractRconHostname(r.text) || `CFX ${config.fivem.cfxId}`;
+  if (parsed.anonymized) {
     const out = {
-      status: 'PARTIAL', detail: kind, players: null, playersSkipped: 0,
-      dynamic, info: null, hostname, onlineCount: dynamic.clients, maxClients,
-      serverReported: null, latencyMs, base: usedBase, baseSource: usedSource,
+      ...baseOut, status: 'ANONYMIZED', detail: 'anonymized', players: [],
+      hostname, onlineCount: 0, latencyMs,
     };
-    setHealth({ ...baseHealth, status: 'PARTIAL', detail: kind, players: dynamic.clients ?? 0, lastError: client.describeKind(kind, pRes.status) });
-    negStore(primary.base, out);
+    setHealth({ status: 'ANONYMIZED', detail: 'anonymized', players: 0, latencyMs, source: 'rcon_status', base: rBase, lastError: 'PUBLIC_ANONYMIZED' });
     return out;
   }
-
-  const status = NETWORK_KINDS.has(kind) ? 'OFFLINE' : 'ERROR';
   const out = {
-    status, detail: kind, players: null, playersSkipped: 0,
-    dynamic, info: null, hostname, onlineCount: dynamic?.clients ?? null, maxClients,
-    serverReported: null, latencyMs, base: usedBase, baseSource: usedSource,
+    ...baseOut, status: 'LIVE', detail: 'ok', players: parsed.players, playersSkipped: parsed.skipped,
+    hostname, onlineCount: parsed.players.length, latencyMs,
   };
-  setHealth({ ...baseHealth, status, detail: kind, players: 0, lastError: `${client.describeKind(kind, pRes.status)} @ ${usedBase}` });
-  negStore(primary.base, out);
+  setHealth({ status: 'LIVE', detail: 'ok', players: parsed.players.length, latencyMs, source: 'rcon_status', base: rBase });
   return out;
 }
 
@@ -258,28 +215,19 @@ function anonymizedText(base) {
   );
 }
 
-// ---------- Tekil kaynak getter'ları (§26) — önbellek farkında ----------
+// ---------- Tekil kaynak getter'ları (§26) ----------
 
+/** HTTP teşhis bazı (RCON'dan bağımsız — §33). */
 async function currentBase() {
   const { primary } = client.resolveBases();
   return primary || { base: null, source: null };
 }
 
+/** Oyuncu listesi — RCON `status` üzerinden (§26 getPlayers). */
 async function getPlayers() {
-  const { base } = await currentBase();
-  if (!base) return { ok: false, kind: 'no_endpoint', players: [], skipped: 0 };
-  let r = null;
-  try {
-    r = await client.getPlayersRaw(base);
-  } catch {
-    r = { ok: false, kind: 'unreachable' };
-  }
-  if (!r.ok) {
-    logFetchError('players', base, '/players.json', r);
-    return { ok: false, kind: r.kind, players: [], skipped: 0 };
-  }
-  const parsed = parser.parsePlayers(r.data);
-  return { ok: parsed.ok, kind: parsed.ok ? 'ok' : 'invalid_players', players: parsed.players, skipped: parsed.skipped };
+  const q = await queryServer();
+  if (q.status !== 'LIVE') return { ok: false, kind: q.detail, players: [], skipped: 0 };
+  return { ok: true, kind: 'ok', players: q.players, skipped: q.playersSkipped };
 }
 
 async function getDynamic() {
@@ -315,20 +263,50 @@ async function getInfo() {
 }
 
 /**
- * Katmanlı endpoint sağlığı (/fivemstatus + geliştirici teşhisi).
- * DNS → TCP → HTTP(info/dynamic/players) + JSON parse, hepsi ayrı raporlanır.
+ * Birleşik sağlık (/fivemstatus + geliştirici teşhisi, §14):
+ * RCON (UDP) testi + direct HTTP teşhisi BİRBİRİNDEN BAĞIMSIZ (§33).
  */
 async function getEndpointHealth() {
-  const { base, source } = await currentBase();
-  if (!base) {
-    return { base: null, source: null, host: null, port: null, dns: null, tcp: null, endpoints: {}, ms: 0 };
-  }
   const t0 = Date.now();
-  const diag = await client.diagnoseBase(base);
+  const rHost = String(config.fivem.rcon.host || '').trim() || '5.231.120.202';
+  const rPort = Number(config.fivem.rcon.port) || 30120;
+
+  // RCON testi (password yoksa ağa çıkılmaz).
+  let rconHealth = {
+    host: rHost, port: rPort, transport: 'UDP', configured: !!config.fivem.rcon.password,
+    test: null,
+  };
+  if (rconHealth.configured) {
+    try {
+      const r = await rcon.status();
+      let players = null;
+      if (r.ok) {
+        const parsed = rconParser.parseStatus(r.text || '');
+        players = parsed.ok && !parsed.anonymized ? parsed.players.length : parsed.anonymized ? 0 : null;
+      }
+      rconHealth.test = {
+        ok: r.ok, kind: r.kind, ms: r.ms, players,
+        error: r.ok ? null : r.kind.toUpperCase(),
+      };
+    } catch (err) {
+      rconHealth.test = { ok: false, kind: 'rcon_error', ms: Date.now() - t0, players: null, error: 'EXCEPTION' };
+      logger.error('RCON health testi hata.', err);
+    }
+  }
+
+  // Direct HTTP teşhisi (bağımsız — oyuncu sorgusunu ETKİLEMEZ).
+  const { base, source } = await currentBase();
+  let http = { base, source, host: null, port: null, dns: null, tcp: null, endpoints: {} };
+  if (base) {
+    const diag = await client.diagnoseBase(base);
+    http = { ...diag, source };
+  }
+
   const h = getHealth();
   return {
-    ...diag,
-    source,
+    cfxId: config.fivem.cfxId,
+    rcon: rconHealth,
+    http,
     ms: Date.now() - t0,
     tokenConfigured: !!config.fivem.playersToken,
     queryStatus: h.status,
