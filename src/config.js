@@ -38,12 +38,16 @@ function idList(name) {
 // Sabit staff ticket rolü — tüm ticket kanallarında FULL erişim (View/Read/Send/ManageMessages)
 const STAFF_TICKET_ROLE_ID = '1522773972393922730';
 
+// Guard komutlarını kullanabilen rol — .env (GUARD_MANAGER_ROLE_IDS) ile değiştirilebilir.
+const GUARD_MANAGER_ROLE_ID = '1533434495750111403';
+
 // Başvuru kabulünde verilen roller — .env (TICKET_ACCEPT_ROLE_IDS) ile değiştirilebilir.
 const ACCEPT_ROLE_IDS = ['1522773983588646982', '1522773986721660928'];
 
 const config = {
   botName: 'Javrex Bot System',
   STAFF_TICKET_ROLE_ID,
+  GUARD_MANAGER_ROLE_ID,
   ACCEPT_ROLE_IDS,
 
   // --- Hassas bilgiler (.env) ---
@@ -56,7 +60,10 @@ const config = {
 
   // --- Yetki rol listeleri (virgüllü rol ID'leri; admin her kapıdan geçer) ---
   roleManagerRoleIds: idList('ROLE_MANAGER_ROLE_IDS'), // /rolver + /rolal
-  guardManagerRoleIds: idList('GUARD_MANAGER_ROLE_IDS'), // guard komutları
+  guardManagerRoleIds: (() => {
+    const env = idList('GUARD_MANAGER_ROLE_IDS');
+    return env.length ? env : [GUARD_MANAGER_ROLE_ID];
+  })(), // guard komutları (/guardekle, /guardçıkar, /guardliste, /guardsetup)
   banManagerRoleIds: idList('BAN_MANAGER_ROLE_IDS'), // /ban + /unban
   staffRoleIds: (() => {
     const base = idList('STAFF_ROLE_IDS');
