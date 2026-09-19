@@ -34,8 +34,6 @@ const {
   buildAddUserRow,
   buildLogEmbed,
   buildTranscriptRow,
-  ACCEPT_MODAL_ID,
-  buildAcceptModal,
 } = require('../utils/ticketEmbeds');
 const { checkRoleAction, reasonText } = require('./roleHandler');
 const { fetchChannelMessages, buildTranscriptFile } = require('../utils/transcript');
@@ -787,65 +785,14 @@ async function handleAcceptRequest(interaction) {
     await interaction.reply({ content: `ℹ️ ${decisionText(ticket.decision, ticket.decided_by)}`, ...EPH() }).catch(() => {});
     return true;
   }
-  const owner = await interaction.guild.members.fetch(ticket.user_id).catch(() => null);
-  try {
-    await interaction.showModal(
-      buildAcceptModal({
-        ticketId: ticket.id,
-        kodDefault: String(ticket.id),
-        isimDefault: owner ? owner.displayName.slice(0, 24) : '',
-      }),
-    );
-  } catch (err) {
-    logger.warn(`Ticket #${ticket.id} kabul modalı açılamadı: ${err.code || err.message}`);
-    if (!interaction.replied && !interaction.deferred && interaction.isRepliable()) {
-      await interaction.reply({ embeds: [buildErrorEmbed('Form açılamadı. Lütfen tekrar deneyin.')], ...EPH() }).catch(() => {});
-    }
-  }
-  return true;
-}
+  await interaction.deferReply({ ...EPH() });
 
-/** "KOD - IC İSİM" formatını Discord 32 karakter sınırına sığdırır (isim tarafından kısaltır). */
-function formatNickname(kod, isim) {
-  const k = String(kod || '').trim().replace(/\s+/g, ' ');
-  const n = String(isim || '').trim().replace(/\s+/g, ' ');
-  let full = `${k} - ${n}`;
-  if (full.length > 32) {
-    const keepName = Math.max(1, 32 - k.length - 3);
-    full = `${k.slice(0, 29)} - ${n.slice(0, keepName)}`.slice(0, 32);
-  }
-  return full;
-}
-
-async function handleAcceptSubmit(interaction) {
-  const ticket = await getTicketOrReply(interaction);
-  if (!ticket) return true;
-  if (!(await requireStaff(interaction))) return true;
-  if (ticket.status === 'closed') {
-    await interaction.reply({ content: '⚫ Bu ticket zaten kapalı.', ...EPH() }).catch(() => {});
-    return true;
-  }
-  if (!isBasvuru(ticket)) {
-    await interaction
-      .reply({ embeds: [buildErrorEmbed('Kabul işlemi yalnızca başvuru ticketlarında kullanılabilir.')], ...EPH() })
-      .catch(() => {});
-    return true;
-  }
-  // Çift gönderim yarışı: ilk karar kazanır
+  // Çift tıklama yarışı: ilk karar kazanır
   const fresh = getTicket(ticket.id) || ticket;
   if (fresh.decision) {
-    await interaction.reply({ content: `ℹ️ ${decisionText(fresh.decision, fresh.decided_by)}`, ...EPH() }).catch(() => {});
+    await interaction.editReply({ content: `ℹ️ ${decisionText(fresh.decision, fresh.decided_by)}` }).catch(() => {});
     return true;
   }
-
-  const kod = (interaction.fields.getTextInputValue('accept_kod') || '').trim().slice(0, 10);
-  const isim = (interaction.fields.getTextInputValue('accept_isim') || '').trim().slice(0, 24);
-  if (!kod || !isim) {
-    await interaction.reply({ embeds: [buildErrorEmbed('KOD ve IC İSİM boş olamaz.')], ...EPH() }).catch(() => {});
-    return true;
-  }
-
-  await interaction.deferReply({ ...EPH() });
 
   const guild = interaction.guild;
   const me = guild.members.me;
@@ -854,6 +801,10 @@ async function handleAcceptSubmit(interaction) {
     await interaction.editReply({ embeds: [buildErrorEmbed('Ticket sahibi sunucuda bulunamadı — rol ve isim verilemedi.')] }).catch(() => {});
     return true;
   }
+
+  // Otomatik değerler: KOD = ticket numarası, IC İSİM = üyenin mevcut görünen adı
+  const kod = String(ticket.id);
+  const isim = owner.displayName;
 
   // Roller (config.ticket.acceptRoleIds) — /rolver ile aynı yetki motoru
   const roleIds = (config.ticket.acceptRoleIds || []).filter((id) => /^\d{17,20}$/.test(String(id)));
@@ -951,6 +902,18 @@ async function handleAcceptSubmit(interaction) {
   if (failed.length) lines.push(`⚠️ Başarısız: ${failed.join(' ')}`);
   await interaction.editReply({ content: lines.join('\n').slice(0, 2000) }).catch(() => {});
   return true;
+}
+
+/** "KOD - IC İSİM" formatını Discord 32 karakter sınırına sığdırır (isim tarafından kısaltır). */
+function formatNickname(kod, isim) {
+  const k = String(kod || '').trim().replace(/\s+/g, ' ');
+  const n = String(isim || '').trim().replace(/\s+/g, ' ');
+  let full = `${k} - ${n}`;
+  if (full.length > 32) {
+    const keepName = Math.max(1, 32 - k.length - 3);
+    full = `${k.slice(0, 29)} - ${n.slice(0, keepName)}`.slice(0, 32);
+  }
+  return full;
 }
 
 async function handleReject(interaction) {
@@ -1350,8 +1313,6 @@ async function repairAllTicketPermissions(client) {
 
 module.exports = {
   handleTicketButton,
-  handleAcceptSubmit,
-  ACCEPT_MODAL_ID,
   _formatNickname: formatNickname,
   _isBasvuru: isBasvuru,
   createTicketFromSelect,

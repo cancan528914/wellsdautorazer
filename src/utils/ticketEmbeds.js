@@ -9,9 +9,6 @@ const {
   ButtonStyle,
   StringSelectMenuBuilder,
   UserSelectMenuBuilder,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
 } = require('discord.js');
 const config = require('../config');
 const { getSetting } = require('../database/database');
@@ -176,35 +173,6 @@ function buildTicketButtons(status = 'open', categoryKey = null, decided = null)
     );
   }
   return rows;
-}
-
-/** Başvuru kabul modalı (KOD + IC İSİM girişi). customId statiktir, ticket kanaldan çözülür. */
-const ACCEPT_MODAL_ID = 'ticket_accept_modal';
-
-function buildAcceptModal({ ticketId, kodDefault = '', isimDefault = '' } = {}) {
-  return new ModalBuilder()
-    .setCustomId(ACCEPT_MODAL_ID)
-    .setTitle(`Başvuru Kabul — Ticket #${ticketId ?? '?'}`.slice(0, 45))
-    .addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('accept_kod')
-          .setLabel('KOD')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-          .setMaxLength(10)
-          .setValue(String(kodDefault ?? '').slice(0, 10)),
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('accept_isim')
-          .setLabel('IC İSİM')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-          .setMaxLength(24)
-          .setValue(String(isimDefault ?? '').slice(0, 24)),
-      ),
-    );
 }
 
 // ---------- 3. Onay diyalogları ----------
@@ -377,8 +345,6 @@ module.exports = {
   buildCategoryMenu,
   buildOpenTicketEmbed,
   buildTicketButtons,
-  ACCEPT_MODAL_ID,
-  buildAcceptModal,
   buildConfirmEmbed,
   buildConfirmRow,
   buildCategoryFormEmbed,
