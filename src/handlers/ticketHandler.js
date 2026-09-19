@@ -803,21 +803,15 @@ async function handleAcceptRequest(interaction) {
     return true;
   }
 
-  // Otomatik değerler (girdi YOK):
-  // - KOD = ticket numarası
-  // - IC İSİM = üyenin onaylı IC kaydı varsa o, yoksa mevcut görünen adı
-  const kod = String(ticket.id);
-  let isim = owner.displayName;
-  let isimKaynak = 'görünen ad';
+  // Takma ad SADECE onaylı IC kaydındaki metnin kendisidir (örn. "1452 - John Carter").
+  // Bot başına ticket no / prefix / tag EKLEMEZ, sonuna bir şey EKLEMEZ, girdi SORMAZ.
+  // Onaylı kayıt yoksa isim değiştirilmez (uydurma isim yazılmaz).
+  let nick = null;
   try {
     const approved = getApprovedIc(guild.id, owner.id);
-    const txt = String(approved?.requested_text || '').trim().replace(/\s+/g, ' ');
-    if (txt) {
-      isim = txt.slice(0, 60);
-      isimKaynak = 'onaylı IC kaydı';
-    }
+    nick = buildAcceptNickname(approved?.requested_text);
   } catch {
-    /* kayda ulaşılamazsa görünen ad kullanılır */
+    nick = null;
   }
 
   // Roller (config.ticket.acceptRoleIds) — /rolver ile aynı yetki motoru
@@ -860,24 +854,27 @@ async function handleAcceptRequest(interaction) {
     }
   }
 
-  // Takma isim: "KOD - IC İSİM"
-  const nick = formatNickname(kod, isim);
+  // Takma isim: onaylı metin aynen gönderilir (nick null ise atlanır).
   let nickOk = false;
   let nickWhy = '';
-  try {
-    if (!me?.permissions?.has(PermissionFlagsBits.ManageNicknames)) {
-      nickWhy = 'botta **Takma Adları Yönet** yetkisi yok';
-    } else if (owner.id === guild.ownerId) {
-      nickWhy = 'sunucu sahibinin ismi değiştirilemez';
-    } else if ((me.roles?.highest?.position ?? 0) <= (owner.roles?.highest?.position ?? 0)) {
-      nickWhy = 'botun rolü yetersiz (bot rolü üyenin rolünden üstte olmalı)';
-    } else {
-      await owner.setNickname(nick, `Başvuru kabulü (ticket #${ticket.id}, ${interaction.user.tag})`);
-      nickOk = true;
+  if (nick === null) {
+    nickWhy = 'onaylı IC kaydı bulunamadı — isim değiştirilmedi (önce IC onay kanalından onay alın)';
+  } else {
+    try {
+      if (!me?.permissions?.has(PermissionFlagsBits.ManageNicknames)) {
+        nickWhy = 'botta **Takma Adları Yönet** yetkisi yok';
+      } else if (owner.id === guild.ownerId) {
+        nickWhy = 'sunucu sahibinin ismi değiştirilemez';
+      } else if ((me.roles?.highest?.position ?? 0) <= (owner.roles?.highest?.position ?? 0)) {
+        nickWhy = 'botun rolü yetersiz (bot rolü üyenin rolünden üstte olmalı)';
+      } else {
+        await owner.setNickname(nick, `Başvuru kabulü (ticket #${ticket.id}, ${interaction.user.tag})`);
+        nickOk = true;
+      }
+    } catch (err) {
+      logger.warn(`Ticket #${ticket.id} isim değiştirilemedi: ${err.code || err.message}`);
+      nickWhy = 'Discord hatası';
     }
-  } catch (err) {
-    logger.warn(`Ticket #${ticket.id} isim değiştirilemedi: ${err.code || err.message}`);
-    nickWhy = 'Discord hatası';
   }
 
   // Karar HER HALDE kaydedilir (yetkili kararı verilmiştir); sonuçlar raporlanır
@@ -898,36 +895,37 @@ async function handleAcceptRequest(interaction) {
   await refreshPanel(interaction, updated, embed, buildTicketButtons('open', ticket.category_key, 'accepted'));
   markTicketGuard(interaction.guildId, ticket.channel_id);
 
-  logger.success(`Ticket #${ticket.id} başvuru kabul edildi (${interaction.user.tag}): roller [${added.length}] isim "${nick}"`);
+  logger.success(`Ticket #${ticket.id} başvuru kabul edildi (${interaction.user.tag}): roller [${added.length}] isim "${nick ?? '—'}")`);
   await sendLog(guild, 'accepted', {
     ticketId: ticket.id,
     userId: ticket.user_id,
     categoryLabel: ticket.category_label,
     channelId: ticket.channel_id,
     actorId: interaction.user.id,
-    extra: `Roller: ${added.length ? added.join(' ') : '—'}${skipped.length ? ` (zaten vardı: ${skipped.join(' ')})` : ''}${failed.length ? ` | Başarısız: ${failed.join(' ')}` : ''} • İsim: \`${nick}\` (${isimKaynak})${nickOk ? '' : ` (verilemedi: ${nickWhy})`}`,
+    extra: `Roller: ${added.length ? added.join(' ') : '—'}${skipped.length ? ` (zaten vardı: ${skipped.join(' ')})` : ''}${failed.length ? ` | Başarısız: ${failed.join(' ')}` : ''} • İsim: ${nick === null ? '—' : `\`${nick}\``}${nickOk ? '' : ` (verilemedi: ${nickWhy})`}`,
   });
 
   const lines = [
     `✅ **Başvuru kabul edildi:** <@${ticket.user_id}>`,
     `🎭 Roller: ${added.length ? added.join(' ') : '—'}${skipped.length ? ` (zaten vardı: ${skipped.join(' ')})` : ''}`,
-    `📝 İsim: \`${nick}\` (${isimKaynak})${nickOk ? '' : ` — ⚠️ verilemedi (${nickWhy})`}`,
+    nick === null
+      ? `📝 İsim: — ⚠️ ${nickWhy}`
+      : `📝 İsim: \`${nick}\`${nickOk ? '' : ` — ⚠️ verilemedi (${nickWhy})`}`,
   ];
   if (failed.length) lines.push(`⚠️ Başarısız: ${failed.join(' ')}`);
   await interaction.editReply({ content: lines.join('\n').slice(0, 2000) }).catch(() => {});
   return true;
 }
 
-/** "KOD - IC İSİM" formatını Discord 32 karakter sınırına sığdırır (isim tarafından kısaltır). */
-function formatNickname(kod, isim) {
-  const k = String(kod || '').trim().replace(/\s+/g, ' ');
-  const n = String(isim || '').trim().replace(/\s+/g, ' ');
-  let full = `${k} - ${n}`;
-  if (full.length > 32) {
-    const keepName = Math.max(1, 32 - k.length - 3);
-    full = `${k.slice(0, 29)} - ${n.slice(0, keepName)}`.slice(0, 32);
-  }
-  return full;
+/**
+ * Kabulde yazılacak takma adı üretir: onaylı IC metninin kendisi
+ * (örn. "1452 - John Carter"). Boşluklar normalize edilir, 32 karaktere
+ * kesilir (baştan — KOD korunur). Kayıt yoksa null döner (isim yazılmaz).
+ */
+function buildAcceptNickname(approvedText) {
+  const raw = String(approvedText || '').trim().replace(/\s+/g, ' ');
+  if (!raw) return null;
+  return raw.slice(0, 32);
 }
 
 async function handleReject(interaction) {
@@ -1327,7 +1325,7 @@ async function repairAllTicketPermissions(client) {
 
 module.exports = {
   handleTicketButton,
-  _formatNickname: formatNickname,
+  _buildAcceptNickname: buildAcceptNickname,
   _isBasvuru: isBasvuru,
   createTicketFromSelect,
   handleAddUserSelect,
