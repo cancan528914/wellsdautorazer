@@ -12,6 +12,8 @@ const { LEVEL_META } = require('../guard/constants');
 const logger = require('../utils/logger');
 
 module.exports = {
+  // Guard-yönetici rolü global kapıdan muaf tutulur (yetki canManageGuard ile denetlenir).
+  openToGuardManagers: true,
   data: new SlashCommandBuilder()
     .setName('guardçıkar')
     .setDescription('Kullanıcıyı Guard whitelistinden çıkarır (sadece Guard yöneticileri).')

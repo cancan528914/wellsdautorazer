@@ -18,6 +18,8 @@ const GUARD_LOG_NAME = 'guard-log';
 const tick = (ok) => (ok ? '🟢' : '🔴');
 
 module.exports = {
+  // Guard-yönetici rolü global kapıdan muaf tutulur (yetki canManageGuard ile denetlenir).
+  openToGuardManagers: true,
   data: new SlashCommandBuilder().setName('guardsetup').setDescription('Guard sistemini kurar ve sağlığını raporlar.'),
 
   async execute(interaction) {

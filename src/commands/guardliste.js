@@ -62,6 +62,8 @@ function buildPages(rows) {
 }
 
 module.exports = {
+  // Guard-yönetici rolü global kapıdan muaf tutulur (yetki canManageGuard ile denetlenir).
+  openToGuardManagers: true,
   data: new SlashCommandBuilder().setName('guardliste').setDescription('Guard panelini gösterir (sadece Guard yöneticileri).'),
 
   async execute(interaction) {

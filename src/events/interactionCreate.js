@@ -6,6 +6,7 @@
 const { MessageFlags } = require('discord.js');
 const { buildErrorEmbed } = require('../utils/embeds');
 const { hasCommandAccess, canManageRoles, canManageBan } = require('../utils/permissions');
+const { canManageGuard } = require('../guard/permissions');
 const { handleButton } = require('../handlers/buttonHandler');
 const { handleSelectMenu } = require('../handlers/selectHandler');
 const { MODAL_ID, handleMazeretSubmit } = require('../handlers/mazeretHandler');
@@ -80,12 +81,14 @@ module.exports = {
         }
         // Global erişim kapısı: liste doluysa sadece izinli roller + adminler.
         // İstisnalar: openToEveryone (herkes), openToRoleManagers (/rolver+/rolal),
-        // openToBanManagers (/ban+/unban). İşaretli komutlar ilgili kitleye de açıktır.
+        // openToBanManagers (/ban+/unban), openToGuardManagers (guard komutları).
+        // İşaretli komutlar ilgili kitleye de açıktır.
         const globalOk = hasCommandAccess(interaction.member);
         const everyoneOk = command.openToEveryone === true;
         const roleOk = command.openToRoleManagers === true && canManageRoles(interaction.member);
         const banOk = command.openToBanManagers === true && canManageBan(interaction.member);
-        if (!globalOk && !everyoneOk && !roleOk && !banOk) {
+        const guardOk = command.openToGuardManagers === true && canManageGuard(interaction.member);
+        if (!globalOk && !everyoneOk && !roleOk && !banOk && !guardOk) {
           return interaction.reply({ embeds: [buildErrorEmbed('Bu botu kullanma yetkin yok.')], flags: MessageFlags.Ephemeral }).catch(() => {});
         }
         await command.execute(interaction);

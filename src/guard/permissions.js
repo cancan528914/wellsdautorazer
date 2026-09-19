@@ -1,11 +1,11 @@
 /**
  * Guard izin sistemi: seviye bazlı AÇIK izinler (numeric karşılaştırma YOK).
  * Her seviye yalnızca kendi alanından muaftır; URL Guard her şeyden muaftır.
- * Yönetim komutları (/guardekle vb.) SADECE adminlere + guard-yönetici
- * rollerine açıktır — whiteliste olmak bu komutlara erişim vermez.
+ * Yönetim komutları (/guardekle vb.) SADECE 1533434495750111403 rolune açıktır
+ * (config.GUARD_MANAGER_ROLE_ID). Administrator / ManageGuild / ADMIN_ROLE_ID /
+ * eski guard rolleri tek başına erişim VERMEZ; whitelist seviyesi (1-4) komut
+ * erişimi VERMEZ (koruma ≠ yönetim). Botun API permissionları etkilenmez.
  */
-const { isAdmin } = require('../utils/permissions');
-const { hasAnyRole } = require('../utils/permissions');
 const config = require('../config');
 const { getGuardLevel } = require('../database/database');
 const { GUARD_ACTION, ROLE_ACTIONS, CHANNEL_ACTIONS, BANKICK_ACTIONS, FULL_TRUST_ACTIONS } = require('./constants');
@@ -43,12 +43,13 @@ function isActionAllowed(level, action) {
   }
 }
 
-/** Guard yönetim komutlarını kullanabilir mi? (yalnızca admin VEYA guard-yönetici rolü) */
+/** Guard yönetim komutlarını kullanabilir mi? TEK KURAL: guard-yönetici rolü. */
 function canManageGuard(member) {
   if (!member) return false;
   try {
-    if (isAdmin(member)) return true;
-    return hasAnyRole(member, config.guardManagerRoleIds);
+    const cache = member.roles?.cache;
+    if (!cache || typeof cache.has !== 'function') return false;
+    return cache.has(config.GUARD_MANAGER_ROLE_ID);
   } catch {
     return false;
   }

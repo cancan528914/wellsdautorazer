@@ -60,10 +60,9 @@ const config = {
 
   // --- Yetki rol listeleri (virgüllü rol ID'leri; admin her kapıdan geçer) ---
   roleManagerRoleIds: idList('ROLE_MANAGER_ROLE_IDS'), // /rolver + /rolal
-  guardManagerRoleIds: (() => {
-    const env = idList('GUARD_MANAGER_ROLE_IDS');
-    return env.length ? env : [GUARD_MANAGER_ROLE_ID];
-  })(), // guard komutları (/guardekle, /guardçıkar, /guardliste, /guardsetup)
+  // Guard komut yetkisi TEK ROLE kilitlidir; GUARD_MANAGER_ROLE_IDS env değeri
+  // bilerek göz ardı edilir (eski roller geçersiz). Rol koruması (isSensitiveTarget) aynı listeyi kullanır.
+  guardManagerRoleIds: [GUARD_MANAGER_ROLE_ID], // guard komutları (/guardekle, /guardçıkar, /guardliste, /guardsetup)
   banManagerRoleIds: idList('BAN_MANAGER_ROLE_IDS'), // /ban + /unban
   staffRoleIds: (() => {
     const base = idList('STAFF_ROLE_IDS');
