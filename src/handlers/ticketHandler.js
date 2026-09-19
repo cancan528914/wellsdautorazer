@@ -16,6 +16,7 @@ const {
   setTicketChannel,
   setTicketPanelMessage,
   setTicketLogMessage,
+  getApprovedIc,
   claimTicket,
   closeTicket,
   setTicketDecision,
@@ -802,9 +803,22 @@ async function handleAcceptRequest(interaction) {
     return true;
   }
 
-  // Otomatik değerler: KOD = ticket numarası, IC İSİM = üyenin mevcut görünen adı
+  // Otomatik değerler (girdi YOK):
+  // - KOD = ticket numarası
+  // - IC İSİM = üyenin onaylı IC kaydı varsa o, yoksa mevcut görünen adı
   const kod = String(ticket.id);
-  const isim = owner.displayName;
+  let isim = owner.displayName;
+  let isimKaynak = 'görünen ad';
+  try {
+    const approved = getApprovedIc(guild.id, owner.id);
+    const txt = String(approved?.requested_text || '').trim().replace(/\s+/g, ' ');
+    if (txt) {
+      isim = txt.slice(0, 60);
+      isimKaynak = 'onaylı IC kaydı';
+    }
+  } catch {
+    /* kayda ulaşılamazsa görünen ad kullanılır */
+  }
 
   // Roller (config.ticket.acceptRoleIds) — /rolver ile aynı yetki motoru
   const roleIds = (config.ticket.acceptRoleIds || []).filter((id) => /^\d{17,20}$/.test(String(id)));
@@ -891,13 +905,13 @@ async function handleAcceptRequest(interaction) {
     categoryLabel: ticket.category_label,
     channelId: ticket.channel_id,
     actorId: interaction.user.id,
-    extra: `Roller: ${added.length ? added.join(' ') : '—'}${skipped.length ? ` (zaten vardı: ${skipped.join(' ')})` : ''}${failed.length ? ` | Başarısız: ${failed.join(' ')}` : ''} • İsim: \`${nick}\`${nickOk ? '' : ` (verilemedi: ${nickWhy})`}`,
+    extra: `Roller: ${added.length ? added.join(' ') : '—'}${skipped.length ? ` (zaten vardı: ${skipped.join(' ')})` : ''}${failed.length ? ` | Başarısız: ${failed.join(' ')}` : ''} • İsim: \`${nick}\` (${isimKaynak})${nickOk ? '' : ` (verilemedi: ${nickWhy})`}`,
   });
 
   const lines = [
     `✅ **Başvuru kabul edildi:** <@${ticket.user_id}>`,
     `🎭 Roller: ${added.length ? added.join(' ') : '—'}${skipped.length ? ` (zaten vardı: ${skipped.join(' ')})` : ''}`,
-    `📝 İsim: \`${nick}\`${nickOk ? '' : ` — ⚠️ verilemedi (${nickWhy})`}`,
+    `📝 İsim: \`${nick}\` (${isimKaynak})${nickOk ? '' : ` — ⚠️ verilemedi (${nickWhy})`}`,
   ];
   if (failed.length) lines.push(`⚠️ Başarısız: ${failed.join(' ')}`);
   await interaction.editReply({ content: lines.join('\n').slice(0, 2000) }).catch(() => {});

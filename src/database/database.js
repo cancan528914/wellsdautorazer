@@ -244,6 +244,7 @@ module.exports = {
   createIcRequest,
   getIcByPanel,
   getPendingIc,
+  getApprovedIc,
   decideIc,
   setIcPanel,
   setTicketLogMessage,
@@ -644,6 +645,20 @@ function getPendingIc(guildId, userId) {
     );
   } catch (err) {
     logger.error(`[DB] getPendingIc failed: ${guildId}/${userId}`, err);
+    return null;
+  }
+}
+
+/** Kullanıcının en son onaylanmış IC ismi (yoksa null). Başvuru kabulünde IC İSİM buradan alınır. */
+function getApprovedIc(guildId, userId) {
+  try {
+    return (
+      getDb()
+        .prepare("SELECT * FROM ic_approvals WHERE guild_id = ? AND user_id = ? AND status = 'approved' ORDER BY decided_at DESC, id DESC LIMIT 1")
+        .get(String(guildId), String(userId)) || null
+    );
+  } catch (err) {
+    logger.error(`[DB] getApprovedIc failed: ${guildId}/${userId}`, err);
     return null;
   }
 }
