@@ -52,7 +52,10 @@ CREATE TABLE IF NOT EXISTS tickets (
   claimed_at    INTEGER,
   created_at    INTEGER NOT NULL,
   closed_at     INTEGER,
-  closed_by     TEXT
+  closed_by     TEXT,
+  decision      TEXT CHECK (decision IN ('accepted', 'rejected')),
+  decided_by    TEXT,
+  decided_at    INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_tickets_guild_user ON tickets (guild_id, user_id, status);

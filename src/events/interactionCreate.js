@@ -9,6 +9,7 @@ const { hasCommandAccess, canManageRoles, canManageBan } = require('../utils/per
 const { handleButton } = require('../handlers/buttonHandler');
 const { handleSelectMenu } = require('../handlers/selectHandler');
 const { MODAL_ID, handleMazeretSubmit } = require('../handlers/mazeretHandler');
+const { ACCEPT_MODAL_ID, handleAcceptSubmit } = require('../handlers/ticketHandler');
 const logger = require('../utils/logger');
 
 function labelOf(interaction) {
@@ -57,10 +58,12 @@ module.exports = {
         return;
       }
 
-      // --- Modal gönderimleri (mazeret formu) ---
+      // --- Modal gönderimleri (mazeret formu + başvuru kabul formu) ---
       if (interaction.isModalSubmit()) {
         if (interaction.customId === MODAL_ID) {
           await handleMazeretSubmit(interaction);
+        } else if (interaction.customId === ACCEPT_MODAL_ID) {
+          await handleAcceptSubmit(interaction);
         } else {
           logger.warn(`Bilinmeyen modal customId: ${interaction.customId}`);
           if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {

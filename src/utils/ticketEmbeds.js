@@ -9,6 +9,9 @@ const {
   ButtonStyle,
   StringSelectMenuBuilder,
   UserSelectMenuBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } = require('discord.js');
 const config = require('../config');
 const { getSetting } = require('../database/database');
@@ -124,10 +127,12 @@ function buildOpenTicketEmbed({ guild, userId, categoryLabel, createdUnix, statu
 
 /**
  * Yönetim butonları. Kapalı ticket'ta sadece Sil aktif kalır.
+ * Başvuru (basvuru) ticketlarında 3. satırda Kabul Et / Reddet bulunur.
  * customId'ler statiktir → restart-safe (kanal ID üzerinden DB'den çözülür).
  */
-function buildTicketButtons(status = 'open') {
+function buildTicketButtons(status = 'open', categoryKey = null, decided = null) {
   const closed = status === 'closed';
+  const decidedLocked = !!decided; // karar verildiyse kabul/ret kilitlenir
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('ticket_claim')
@@ -151,7 +156,55 @@ function buildTicketButtons(status = 'open') {
       .setDisabled(closed),
     new ButtonBuilder().setCustomId('ticket_delete').setLabel('Sil').setStyle(ButtonStyle.Danger).setEmoji('🗑️'),
   );
-  return [row1, row2];
+  const rows = [row1, row2];
+  if (categoryKey === 'basvuru' && !closed) {
+    rows.push(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('ticket_accept')
+          .setLabel('Kabul Et')
+          .setStyle(ButtonStyle.Success)
+          .setEmoji('✅')
+          .setDisabled(decidedLocked),
+        new ButtonBuilder()
+          .setCustomId('ticket_reject')
+          .setLabel('Reddet')
+          .setStyle(ButtonStyle.Danger)
+          .setEmoji('❌')
+          .setDisabled(decidedLocked),
+      ),
+    );
+  }
+  return rows;
+}
+
+/** Başvuru kabul modalı (KOD + IC İSİM girişi). customId statiktir, ticket kanaldan çözülür. */
+const ACCEPT_MODAL_ID = 'ticket_accept_modal';
+
+function buildAcceptModal({ ticketId, kodDefault = '', isimDefault = '' } = {}) {
+  return new ModalBuilder()
+    .setCustomId(ACCEPT_MODAL_ID)
+    .setTitle(`Başvuru Kabul — Ticket #${ticketId ?? '?'}`.slice(0, 45))
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('accept_kod')
+          .setLabel('KOD')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(10)
+          .setValue(String(kodDefault ?? '').slice(0, 10)),
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('accept_isim')
+          .setLabel('IC İSİM')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(24)
+          .setValue(String(isimDefault ?? '').slice(0, 24)),
+      ),
+    );
 }
 
 // ---------- 3. Onay diyalogları ----------
@@ -211,6 +264,8 @@ const LOG_STYLE = {
   closed: { emoji: '🔒', label: 'Kapatıldı', color: 0xe67e22 },
   deleted: { emoji: '🗑️', label: 'Silindi', color: 0xe74c3c },
   claimed: { emoji: '🧑‍💼', label: 'Sahiplenildi', color: 0x3498db },
+  accepted: { emoji: '✅', label: 'Başvuru Kabul Edildi', color: 0x2ecc71 },
+  rejected: { emoji: '❌', label: 'Başvuru Reddedildi', color: 0xe74c3c },
   user_added: { emoji: '👤', label: 'Kullanıcı Eklendi', color: 0x9b59b6 },
   called: { emoji: '🔔', label: 'Yetkili Çağrıldı', color: 0xf1c40f },
 };
@@ -322,6 +377,8 @@ module.exports = {
   buildCategoryMenu,
   buildOpenTicketEmbed,
   buildTicketButtons,
+  ACCEPT_MODAL_ID,
+  buildAcceptModal,
   buildConfirmEmbed,
   buildConfirmRow,
   buildCategoryFormEmbed,

@@ -38,9 +38,13 @@ function idList(name) {
 // Sabit staff ticket rolü — tüm ticket kanallarında FULL erişim (View/Read/Send/ManageMessages)
 const STAFF_TICKET_ROLE_ID = '1522773972393922730';
 
+// Başvuru kabulünde verilen roller — .env (TICKET_ACCEPT_ROLE_IDS) ile değiştirilebilir.
+const ACCEPT_ROLE_IDS = ['1522773983588646982', '1522773986721660928'];
+
 const config = {
   botName: 'Javrex Bot System',
   STAFF_TICKET_ROLE_ID,
+  ACCEPT_ROLE_IDS,
 
   // --- Hassas bilgiler (.env) ---
   token: required('DISCORD_TOKEN'),
@@ -134,6 +138,12 @@ const config = {
     pingRoleId: (process.env.TICKET_PING_ROLE_ID || '').trim() || null,
     // Açık ticketları salt-okunur görebilecek rol (boşsa ek izin verilmez).
     viewerRoleId: (process.env.TICKET_VIEWER_ROLE_ID || '').trim() || null,
+    // Başvuru kabulünde ticket sahibine verilen roller.
+    // .env'de TICKET_ACCEPT_ROLE_IDS virgüllü liste olarak ezilebilir.
+    acceptRoleIds: (() => {
+      const env = idList('TICKET_ACCEPT_ROLE_IDS');
+      return env.length ? env : [...ACCEPT_ROLE_IDS];
+    })(),
     color: 0x5865f2, // premium blurple
     panelAbout:
       process.env.TICKET_PANEL_ABOUT ||

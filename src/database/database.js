@@ -54,6 +54,9 @@ function migrate(database) {
     'ALTER TABLE tickets ADD COLUMN log_message_id TEXT',
     'ALTER TABLE tickets ADD COLUMN panel_message_id TEXT',
     'ALTER TABLE tickets ADD COLUMN claimed_at INTEGER',
+    'ALTER TABLE tickets ADD COLUMN decision TEXT',
+    'ALTER TABLE tickets ADD COLUMN decided_by TEXT',
+    'ALTER TABLE tickets ADD COLUMN decided_at INTEGER',
   ];
   for (const sql of stmts) {
     try {
@@ -225,6 +228,7 @@ module.exports = {
   setTicketPanelMessage,
   claimTicket,
   closeTicket,
+  setTicketDecision,
   deleteTicket,
   incrementClaimStat,
   getTopClaimers,
@@ -374,6 +378,18 @@ function closeTicket(id, closedBy) {
       .run(Date.now(), closedBy ? String(closedBy) : null, Number(id));
   } catch (err) {
     logger.error(`[DB] closeTicket failed: ${id}`, err);
+    throw err;
+  }
+}
+
+/** Başvuru kararı kaydet (decision: 'accepted' | 'rejected'). */
+function setTicketDecision(id, decision, decidedBy) {
+  try {
+    getDb()
+      .prepare('UPDATE tickets SET decision = ?, decided_by = ?, decided_at = ? WHERE id = ?')
+      .run(decision, decidedBy ? String(decidedBy) : null, Date.now(), Number(id));
+  } catch (err) {
+    logger.error(`[DB] setTicketDecision failed: ${id}`, err);
     throw err;
   }
 }

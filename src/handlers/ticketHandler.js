@@ -18,6 +18,7 @@ const {
   setTicketLogMessage,
   claimTicket,
   closeTicket,
+  setTicketDecision,
   deleteTicket,
   getAllTickets,
   incrementClaimStat,
@@ -33,7 +34,10 @@ const {
   buildAddUserRow,
   buildLogEmbed,
   buildTranscriptRow,
+  ACCEPT_MODAL_ID,
+  buildAcceptModal,
 } = require('../utils/ticketEmbeds');
+const { checkRoleAction, reasonText } = require('./roleHandler');
 const { fetchChannelMessages, buildTranscriptFile } = require('../utils/transcript');
 let transcriptService = null;
 try { transcriptService = require('../services/transcriptService'); } catch { transcriptService = null; }
@@ -364,7 +368,7 @@ async function createTicketFromSelect(interaction, categoryKey) {
             claimedBy: null,
           }),
         ],
-        components: buildTicketButtons('open'),
+        components: buildTicketButtons('open', category.key, null),
       });
       setTicketPanelMessage(ticketId, panelMsg.id);
     } catch (err) {
@@ -431,6 +435,10 @@ async function handleTicketButton(interaction) {
         return handleDeleteConfirm(interaction, false);
       case 'ticket_adduser':
         return handleAddUserRequest(interaction);
+      case 'ticket_accept':
+        return handleAcceptRequest(interaction);
+      case 'ticket_reject':
+        return handleReject(interaction);
       case 'ticket_call':
         // Kaldırılan özellik: eski panellerde buton hâlâ görünebilir
         await interaction
@@ -503,7 +511,7 @@ async function handleClaim(interaction) {
     status: 'claimed',
     claimedBy: interaction.user.id,
   });
-  await refreshPanel(interaction, ticket, embed, buildTicketButtons('open'));
+  await refreshPanel(interaction, ticket, embed, buildTicketButtons('open', ticket.category_key, ticket.decision));
   // Spec 12: claim staff overwrite'ı silmemeli — doğrula, eksikse düzelt (sessiz)
   try { await ensureStaffTicketAccess(interaction.channel, { verify: false, retry: 0 }); } catch {}
   // Guard: panel edit saldırgan sayılmasın
@@ -584,7 +592,7 @@ async function handleCloseConfirm(interaction, approved) {
     status: 'closed',
     claimedBy: ticket.claimed_by,
   });
-  await refreshPanel(interaction, ticket, embed, buildTicketButtons('closed'));
+  await refreshPanel(interaction, ticket, embed, buildTicketButtons('closed', ticket.category_key, ticket.decision));
   await confirmMsg?.delete().catch(() => {});
 
   logger.success(`Ticket #${ticket.id} kapatıldı (${interaction.user.tag})`);
@@ -747,6 +755,263 @@ async function handleAddUserSelect(interaction) {
     logger.error(`Ticket #${ticket.id} kullanıcı ekleme başarısız.`, err);
     await interaction.followUp({ embeds: [buildErrorEmbed('Kullanıcı eklenemedi. Bot yetkilerini kontrol edin.')], ...EPH() }).catch(() => {});
   }
+  return true;
+}
+
+// ---------- Başvuru kabul / ret (sadece basvuru kategorisi) ----------
+
+function isBasvuru(ticket) {
+  return String(ticket?.category_key || '') === 'basvuru';
+}
+
+function decisionText(decision, decidedBy) {
+  const what = decision === 'accepted' ? 'kabul edilmiş' : 'reddedilmiş';
+  return decidedBy ? `Bu başvuru zaten ${what} (<@${decidedBy}>).` : `Bu başvuru zaten ${what}.`;
+}
+
+async function handleAcceptRequest(interaction) {
+  if (!(await requireStaff(interaction))) return true;
+  const ticket = await getTicketOrReply(interaction);
+  if (!ticket) return true;
+  if (ticket.status === 'closed') {
+    await interaction.reply({ content: '⚫ Bu ticket zaten kapalı.', ...EPH() }).catch(() => {});
+    return true;
+  }
+  if (!isBasvuru(ticket)) {
+    await interaction
+      .reply({ embeds: [buildErrorEmbed('Kabul/Ret butonları yalnızca başvuru ticketlarında kullanılabilir.')], ...EPH() })
+      .catch(() => {});
+    return true;
+  }
+  if (ticket.decision) {
+    await interaction.reply({ content: `ℹ️ ${decisionText(ticket.decision, ticket.decided_by)}`, ...EPH() }).catch(() => {});
+    return true;
+  }
+  const owner = await interaction.guild.members.fetch(ticket.user_id).catch(() => null);
+  try {
+    await interaction.showModal(
+      buildAcceptModal({
+        ticketId: ticket.id,
+        kodDefault: String(ticket.id),
+        isimDefault: owner ? owner.displayName.slice(0, 24) : '',
+      }),
+    );
+  } catch (err) {
+    logger.warn(`Ticket #${ticket.id} kabul modalı açılamadı: ${err.code || err.message}`);
+    if (!interaction.replied && !interaction.deferred && interaction.isRepliable()) {
+      await interaction.reply({ embeds: [buildErrorEmbed('Form açılamadı. Lütfen tekrar deneyin.')], ...EPH() }).catch(() => {});
+    }
+  }
+  return true;
+}
+
+/** "KOD - IC İSİM" formatını Discord 32 karakter sınırına sığdırır (isim tarafından kısaltır). */
+function formatNickname(kod, isim) {
+  const k = String(kod || '').trim().replace(/\s+/g, ' ');
+  const n = String(isim || '').trim().replace(/\s+/g, ' ');
+  let full = `${k} - ${n}`;
+  if (full.length > 32) {
+    const keepName = Math.max(1, 32 - k.length - 3);
+    full = `${k.slice(0, 29)} - ${n.slice(0, keepName)}`.slice(0, 32);
+  }
+  return full;
+}
+
+async function handleAcceptSubmit(interaction) {
+  const ticket = await getTicketOrReply(interaction);
+  if (!ticket) return true;
+  if (!(await requireStaff(interaction))) return true;
+  if (ticket.status === 'closed') {
+    await interaction.reply({ content: '⚫ Bu ticket zaten kapalı.', ...EPH() }).catch(() => {});
+    return true;
+  }
+  if (!isBasvuru(ticket)) {
+    await interaction
+      .reply({ embeds: [buildErrorEmbed('Kabul işlemi yalnızca başvuru ticketlarında kullanılabilir.')], ...EPH() })
+      .catch(() => {});
+    return true;
+  }
+  // Çift gönderim yarışı: ilk karar kazanır
+  const fresh = getTicket(ticket.id) || ticket;
+  if (fresh.decision) {
+    await interaction.reply({ content: `ℹ️ ${decisionText(fresh.decision, fresh.decided_by)}`, ...EPH() }).catch(() => {});
+    return true;
+  }
+
+  const kod = (interaction.fields.getTextInputValue('accept_kod') || '').trim().slice(0, 10);
+  const isim = (interaction.fields.getTextInputValue('accept_isim') || '').trim().slice(0, 24);
+  if (!kod || !isim) {
+    await interaction.reply({ embeds: [buildErrorEmbed('KOD ve IC İSİM boş olamaz.')], ...EPH() }).catch(() => {});
+    return true;
+  }
+
+  await interaction.deferReply({ ...EPH() });
+
+  const guild = interaction.guild;
+  const me = guild.members.me;
+  const owner = await guild.members.fetch(ticket.user_id).catch(() => null);
+  if (!owner) {
+    await interaction.editReply({ embeds: [buildErrorEmbed('Ticket sahibi sunucuda bulunamadı — rol ve isim verilemedi.')] }).catch(() => {});
+    return true;
+  }
+
+  // Roller (config.ticket.acceptRoleIds) — /rolver ile aynı yetki motoru
+  const roleIds = (config.ticket.acceptRoleIds || []).filter((id) => /^\d{17,20}$/.test(String(id)));
+  const added = [];
+  const skipped = [];
+  const failed = [];
+  for (const roleId of roleIds) {
+    const rid = String(roleId);
+    let role = null;
+    try {
+      role = await guild.roles.fetch(rid).catch(() => null);
+    } catch {
+      role = null;
+    }
+    if (!role) {
+      failed.push(`\`${rid}\` (rol bulunamadı)`);
+      continue;
+    }
+    const check = checkRoleAction({
+      executor: interaction.member,
+      target: owner,
+      role,
+      me,
+      guildId: guild.id,
+      guildOwnerId: guild.ownerId,
+      action: 'add',
+    });
+    if (!check.ok) {
+      if (check.reason === 'already') skipped.push(`<@&${rid}>`);
+      else failed.push(`<@&${rid}> (${reasonText(check.reason)})`);
+      continue;
+    }
+    try {
+      await owner.roles.add(rid, `Başvuru kabulü (ticket #${ticket.id}, ${interaction.user.tag})`);
+      added.push(`<@&${rid}>`);
+    } catch (err) {
+      logger.warn(`Ticket #${ticket.id} rol verilemedi (${rid}): ${err.code || err.message}`);
+      failed.push(`<@&${rid}> (Discord hatası)`);
+    }
+  }
+
+  // Takma isim: "KOD - IC İSİM"
+  const nick = formatNickname(kod, isim);
+  let nickOk = false;
+  let nickWhy = '';
+  try {
+    if (!me?.permissions?.has(PermissionFlagsBits.ManageNicknames)) {
+      nickWhy = 'botta **Takma Adları Yönet** yetkisi yok';
+    } else if (owner.id === guild.ownerId) {
+      nickWhy = 'sunucu sahibinin ismi değiştirilemez';
+    } else if ((me.roles?.highest?.position ?? 0) <= (owner.roles?.highest?.position ?? 0)) {
+      nickWhy = 'botun rolü yetersiz (bot rolü üyenin rolünden üstte olmalı)';
+    } else {
+      await owner.setNickname(nick, `Başvuru kabulü (ticket #${ticket.id}, ${interaction.user.tag})`);
+      nickOk = true;
+    }
+  } catch (err) {
+    logger.warn(`Ticket #${ticket.id} isim değiştirilemedi: ${err.code || err.message}`);
+    nickWhy = 'Discord hatası';
+  }
+
+  // Karar HER HALDE kaydedilir (yetkili kararı verilmiştir); sonuçlar raporlanır
+  try {
+    setTicketDecision(ticket.id, 'accepted', interaction.user.id);
+  } catch {
+    /* kayıt hatası akışı engellemez */
+  }
+  const updated = getTicket(ticket.id) || { ...ticket, decision: 'accepted', decided_by: interaction.user.id };
+  const embed = buildOpenTicketEmbed({
+    guild,
+    userId: ticket.user_id,
+    categoryLabel: ticket.category_label,
+    createdUnix: Math.floor(ticket.created_at / 1000),
+    status: ticket.status === 'closed' ? 'closed' : updated.claimed_by ? 'claimed' : 'open',
+    claimedBy: updated.claimed_by || null,
+  });
+  await refreshPanel(interaction, updated, embed, buildTicketButtons('open', ticket.category_key, 'accepted'));
+  markTicketGuard(interaction.guildId, ticket.channel_id);
+
+  logger.success(`Ticket #${ticket.id} başvuru kabul edildi (${interaction.user.tag}): roller [${added.length}] isim "${nick}"`);
+  await sendLog(guild, 'accepted', {
+    ticketId: ticket.id,
+    userId: ticket.user_id,
+    categoryLabel: ticket.category_label,
+    channelId: ticket.channel_id,
+    actorId: interaction.user.id,
+    extra: `Roller: ${added.length ? added.join(' ') : '—'}${skipped.length ? ` (zaten vardı: ${skipped.join(' ')})` : ''}${failed.length ? ` | Başarısız: ${failed.join(' ')}` : ''} • İsim: \`${nick}\`${nickOk ? '' : ` (verilemedi: ${nickWhy})`}`,
+  });
+
+  const lines = [
+    `✅ **Başvuru kabul edildi:** <@${ticket.user_id}>`,
+    `🎭 Roller: ${added.length ? added.join(' ') : '—'}${skipped.length ? ` (zaten vardı: ${skipped.join(' ')})` : ''}`,
+    `📝 İsim: \`${nick}\`${nickOk ? '' : ` — ⚠️ verilemedi (${nickWhy})`}`,
+  ];
+  if (failed.length) lines.push(`⚠️ Başarısız: ${failed.join(' ')}`);
+  await interaction.editReply({ content: lines.join('\n').slice(0, 2000) }).catch(() => {});
+  return true;
+}
+
+async function handleReject(interaction) {
+  if (!(await requireStaff(interaction))) return true;
+  const ticket = await getTicketOrReply(interaction);
+  if (!ticket) return true;
+  if (ticket.status === 'closed') {
+    await interaction.reply({ content: '⚫ Bu ticket zaten kapalı.', ...EPH() }).catch(() => {});
+    return true;
+  }
+  if (!isBasvuru(ticket)) {
+    await interaction
+      .reply({ embeds: [buildErrorEmbed('Kabul/Ret butonları yalnızca başvuru ticketlarında kullanılabilir.')], ...EPH() })
+      .catch(() => {});
+    return true;
+  }
+  if (ticket.decision) {
+    await interaction.reply({ content: `ℹ️ ${decisionText(ticket.decision, ticket.decided_by)}`, ...EPH() }).catch(() => {});
+    return true;
+  }
+
+  await interaction.deferReply({ ...EPH() });
+
+  // Herkese açık ret mesajı (kanalda görünür)
+  try {
+    await interaction.channel.send({
+      content: `<@${ticket.user_id}> ❌ **Başvurunuz reddedildi.**`,
+      allowedMentions: { users: [ticket.user_id] },
+    });
+  } catch (err) {
+    logger.warn(`Ticket #${ticket.id} ret mesajı gönderilemedi: ${err.code || err.message}`);
+    await interaction.editReply({ embeds: [buildErrorEmbed('Ret mesajı kanala gönderilemedi. Bot yetkilerini kontrol edin.')] }).catch(() => {});
+    return true;
+  }
+
+  try {
+    setTicketDecision(ticket.id, 'rejected', interaction.user.id);
+  } catch {
+    /* kayıt hatası akışı engellemez */
+  }
+  const updated = getTicket(ticket.id) || { ...ticket, decision: 'rejected', decided_by: interaction.user.id };
+  const embed = buildOpenTicketEmbed({
+    guild: interaction.guild,
+    userId: ticket.user_id,
+    categoryLabel: ticket.category_label,
+    createdUnix: Math.floor(ticket.created_at / 1000),
+    status: 'open',
+    claimedBy: updated.claimed_by || null,
+  });
+  await refreshPanel(interaction, updated, embed, buildTicketButtons('open', ticket.category_key, 'rejected'));
+  markTicketGuard(interaction.guildId, ticket.channel_id);
+
+  logger.success(`Ticket #${ticket.id} başvuru reddedildi (${interaction.user.tag})`);
+  await sendLog(interaction.guild, 'rejected', {
+    ticketId: ticket.id,
+    userId: ticket.user_id,
+    categoryLabel: ticket.category_label,
+    channelId: ticket.channel_id,
+    actorId: interaction.user.id,
+  });
+  await interaction.editReply({ content: `❌ Başvuru reddedildi ve <@${ticket.user_id}> bilgilendirildi.` }).catch(() => {});
   return true;
 }
 
@@ -1085,6 +1350,10 @@ async function repairAllTicketPermissions(client) {
 
 module.exports = {
   handleTicketButton,
+  handleAcceptSubmit,
+  ACCEPT_MODAL_ID,
+  _formatNickname: formatNickname,
+  _isBasvuru: isBasvuru,
   createTicketFromSelect,
   handleAddUserSelect,
   sendLog,
