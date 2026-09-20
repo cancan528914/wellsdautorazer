@@ -167,6 +167,10 @@ async function onGuildMemberUpdate(client, oldMember, newMember) {
     const now = Date.now();
     const timeoutApplied = newTs > now && oldTs !== newTs;
     const timeoutLifted = !newTs && oldTs > now;
+    // BİLEREK KAPSAM DIŞI: ses susturma (mute/unmute), ses taşıma ve sesten
+    // atma işlemleri rol/timeout değiştirmez → buradan sessizce çıkılır.
+    // Guard voiceStateUpdate dinlemez ve voice audit tiplerini sorgulamaz.
+    // Susturma (timeout) koruması aynen korunur.
     if (!rolesChanged && !timeoutApplied && !timeoutLifted) return;
     if (timeoutApplied || timeoutLifted) {
       await handleGuardEvent({
