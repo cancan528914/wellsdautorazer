@@ -7,7 +7,7 @@ const config = require('../config');
 const { buildErrorEmbed } = require('../utils/embeds');
 const { setGuardLevel } = require('../database/database');
 const { canManageGuard } = require('../guard/permissions');
-const { sendConfigLog } = require('../guard/logger');
+const { sendCommandLog } = require('../guard/logger');
 const { LEVEL_META } = require('../guard/constants');
 const logger = require('../utils/logger');
 
@@ -48,12 +48,11 @@ module.exports = {
       const { created } = setGuardLevel(interaction.guildId, user.id, level, interaction.user.id);
       const meta = LEVEL_META[level];
       logger.success(`Guard whitelist ${created ? 'eklendi' : 'güncellendi'}: ${user.tag} → ${meta.label}`);
-      await sendConfigLog(interaction.guild, {
-        executor: interaction.user,
-        action: '/guardekle',
-        target: `<@${user.id}>`,
-        detail: `New Level: ${meta.emoji} ${meta.label} (${created ? 'yeni kayıt' : 'güncelleme'})`,
-        resultOk: true,
+      await sendCommandLog(interaction.guild, {
+        user: interaction.user,
+        command: '/guardekle',
+        target: `<@${user.id}>\nID: \`${user.id}\``,
+        detail: `${meta.emoji} ${meta.label} (${created ? 'yeni kayıt' : 'güncelleme'})`,
       }).catch(() => {});
       const embed = new EmbedBuilder()
         .setColor(config.colors?.guardConfig ?? 0x3498db)

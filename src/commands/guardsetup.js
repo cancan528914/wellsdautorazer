@@ -9,7 +9,7 @@ const config = require('../config');
 const { buildErrorEmbed } = require('../utils/embeds');
 const { getGuardSettings, saveGuardSettings, listWhitelist } = require('../database/database');
 const { canManageGuard } = require('../guard/permissions');
-const { sendConfigLog } = require('../guard/logger');
+const { sendCommandLog } = require('../guard/logger');
 const { checkHealth } = require('../guard/health');
 const { REQUIRED_PERMS } = require('../guard/constants');
 const logger = require('../utils/logger');
@@ -133,12 +133,11 @@ module.exports = {
         .setFooter({ text: `${config.botName} | Guard` })
         .setTimestamp();
 
-      await sendConfigLog(guild, {
-        executor: interaction.user,
-        action: '/guardsetup',
+      await sendCommandLog(guild, {
+        user: interaction.user,
+        command: '/guardsetup',
         target: `<#${logChannel.id}>`,
-        detail: `Kurulum tamamlandı (whitelist: ${wlCount})`,
-        resultOk: true,
+        detail: `Guard sistemi yapılandırıldı (whitelist: ${wlCount})`,
       }).catch(() => {});
 
       logger.success(`Guard setup tamam: ${guild.name} (log: #${logChannel.name || logChannel.id})`);

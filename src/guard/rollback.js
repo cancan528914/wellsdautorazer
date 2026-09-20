@@ -45,6 +45,12 @@ async function rollbackRoleDelete(guild, snapshot) {
 
 async function rollbackRoleUpdate(guild, oldRole, newRole) {
   const notes = [];
+  // ÖNCE işaretle (§3): edit'in üreteceği roleUpdate event'i self olarak elensin.
+  try {
+    markBotAction(guild.id, AuditLogEvent.RoleUpdate, newRole.id, 'rollback-role-update');
+  } catch {
+    /* ignore */
+  }
   try {
     await newRole.edit(
       {
@@ -85,6 +91,12 @@ async function rollbackMemberRoles(guild, member, entry) {
       if (ch.key === '$remove' && Array.isArray(ch.new)) removed.push(...ch.new.map((r) => r.id));
     }
     const fresh = (await guild.members.fetch(member.id).catch(() => null)) || member;
+    // ÖNCE işaretle (§3): rol ekleme/çıkarma event'leri self olarak elensin.
+    try {
+      markBotAction(guild.id, AuditLogEvent.MemberRoleUpdate, fresh.id, 'rollback-member-roles');
+    } catch {
+      /* ignore */
+    }
     const notes = [];
     if (added.length) {
       await fresh.roles.remove(added, 'Javrex Bot System Guard rollback: yetkisiz rol verme').catch((e) => {
@@ -158,6 +170,12 @@ async function rollbackChannelDelete(guild, snapshot) {
 
 async function rollbackChannelUpdate(guild, oldCh, newCh) {
   const notes = [];
+  // ÖNCE işaretle (§3, §4): tüm alt-adımların üreteceği event'ler self olarak elensin.
+  try {
+    markBotAction(guild.id, AuditLogEvent.ChannelUpdate, newCh.id, 'rollback-channel-update');
+  } catch {
+    /* ignore */
+  }
   try {
     // 1. Temel ayarlar
     if (oldCh.type === ChannelType.GuildText || oldCh.type === ChannelType.GuildAnnouncement) {
@@ -194,6 +212,11 @@ async function rollbackChannelUpdate(guild, oldCh, newCh) {
   }
   // 3. Permission overwrite'ları: sadece FARKLILAŞANLAR geri yazılır
   try {
+    markBotAction(guild.id, AuditLogEvent.ChannelOverwriteUpdate, newCh.id, 'rollback-channel-overwrites');
+  } catch {
+    /* ignore */
+  }
+  try {
     const oldOw = oldCh.permissionOverwrites?.cache;
     const curOw = newCh.permissionOverwrites?.cache;
     if (oldOw && curOw) {
@@ -224,8 +247,12 @@ async function rollbackChannelUpdate(guild, oldCh, newCh) {
 
 async function rollbackBan(guild, userId) {
   try {
+    markBotAction(guild.id, AuditLogEvent.MemberBanRemove, String(userId), 'rollback-unban');
+  } catch {
+    /* ignore */
+  }
+  try {
     await guild.members.unban(String(userId), 'Javrex Bot System Guard rollback: yetkisiz ban');
-    markBotAction(guild.id, AuditLogEvent.MemberBanRemove, String(userId));
     return ok('Hedef kullanıcının banı kaldırıldı.');
   } catch (err) {
     if (err?.code === 10026) return fail('Hedef zaten banlı değil.');
@@ -254,8 +281,12 @@ async function rollbackUnban(guild, userId) {
     if (!hadPriorBan) {
       return fail('Önceden ban kaydı bulunamadı — yanlış banlama engellendi (manuel inceleme).');
     }
+    try {
+      markBotAction(guild.id, AuditLogEvent.MemberBanAdd, String(userId), 'rollback-reban');
+    } catch {
+      /* ignore */
+    }
     await guild.members.ban(String(userId), { reason: 'Javrex Bot System Guard rollback: yetkisiz unban', deleteMessageSeconds: 0 });
-    markBotAction(guild.id, AuditLogEvent.MemberBanAdd, String(userId));
     return ok('Kaldırılan ban tekrar uygulandı.');
   } catch (err) {
     return fail(`Ban tekrar uygulanamadı: ${err.code || err.message}`);
@@ -269,6 +300,11 @@ async function rollbackUnban(guild, userId) {
 async function rollbackTimeout(guild, member, prev) {
   try {
     const target = (await guild.members.fetch(member.id).catch(() => null)) || member;
+    try {
+      markBotAction(guild.id, AuditLogEvent.MemberUpdate, target.id, 'rollback-timeout');
+    } catch {
+      /* ignore */
+    }
     if (prev?.applied) {
       await target.timeout(null, 'Javrex Bot System Guard rollback: yetkisiz susturma');
       markBotAction(guild.id, AuditLogEvent.MemberUpdate, target.id);
@@ -308,6 +344,11 @@ async function rollbackWebhook(guild, channel) {
 }
 
 async function rollbackGuild(guild, oldGuild) {
+  try {
+    markBotAction(guild.id, AuditLogEvent.GuildUpdate, guild.id, 'rollback-guild');
+  } catch {
+    /* ignore */
+  }
   try {
     // Güvenle geri alınabilir skaler ayarlar (tek API çağrısı)
     const payload = {};

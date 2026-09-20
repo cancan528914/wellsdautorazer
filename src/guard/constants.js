@@ -79,6 +79,13 @@ const TRACK_TTL_MS = 25000;
 const WEBHOOK_RECENT_MS = 90000;
 // Aynı saldırının tekrar cezalandırılmaması için dedupe penceresi
 const DEDUPE_TTL_MS = 30000;
+// Incident log toplama penceresi: aynı saldırganın bu süre içindeki tüm
+// aksiyonları TEK incident logunda birleşir (sabit pencere, kaymaz).
+const INCIDENT_LOG_WINDOW_MS = 5000;
+// Aynı audit kaydının tekrar işlenmemesi için entry-ID önbellek süresi
+const DEDUPE_ENTRY_TTL_MS = 60000;
+// actor+action+target(+zaman) ikinci katman dedup penceresi
+const COMBO_TTL_MS = 60000;
 // Devam eden ban varken ikinci ban denemesini engelleyen kilit süresi
 const PUNISH_TTL_MS = 60000;
 
@@ -109,6 +116,9 @@ module.exports = {
   BANKICK_ACTIONS,
   FULL_TRUST_ACTIONS,
   DEDUPE_TTL_MS,
+  INCIDENT_LOG_WINDOW_MS,
+  DEDUPE_ENTRY_TTL_MS,
+  COMBO_TTL_MS,
   PUNISH_TTL_MS,
   AUDIT_RETRY_ATTEMPTS,
   AUDIT_RETRY_DELAY_MS,

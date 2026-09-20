@@ -219,25 +219,38 @@ async function sendConfigLog(guild, { executor, action, target, detail, resultOk
   }
 }
 
-/** §19: liste görüntüleme kaydı (ihlâl DEĞİL). */
+/** §19: liste görüntüleme kaydı (ihlâl DEĞİL) — komut log formatına yönlenir. */
 async function sendListViewLog(guild, { viewer, count }) {
+  return sendCommandLog(guild, {
+    user: viewer,
+    command: '/guardliste',
+    target: null,
+    detail: `${Number(count) || 0} Guard kullanıcısı listelendi.`,
+  });
+}
+
+/**
+ * Guard yönetim komutu kullanımı — saldırı incident'larından BAĞIMSIZ tek log (§5, §10).
+ * target: mention metni (örn. `<@id>`) veya düz metin; detail: seviye/bilgi.
+ */
+async function sendCommandLog(guild, { user, command, target = null, detail = null }) {
   const ch = await getLogChannel(guild);
   if (!ch) return false;
-  const u = userLabel(viewer);
-  const embed = baseEmbed(C().panel)
-    .setTitle('👁️ GUARD PANEL ACCESS')
+  const u = userLabel(user);
+  const embed = baseEmbed(C().config)
+    .setTitle('🛡️ GUARD KOMUTU KULLANILDI')
     .addFields(
-      { name: 'Kullanıcı', value: u.mention, inline: true },
-      { name: 'Kullanıcı ID', value: `\`${u.id}\``, inline: true },
-      { name: 'Komut', value: '/guardliste', inline: false },
-      { name: 'Sonuç', value: `${Number(count) || 0} Guard kullanıcısı listelendi.`, inline: false },
-      { name: 'Tarih', value: trDate(), inline: false },
+      { name: '👤 Kullanan', value: `${u.mention}\nID: \`${u.id}\``, inline: false },
+      { name: '⚙️ Komut', value: `\`${String(command || '—').slice(0, 50)}\``, inline: false },
     );
+  if (target) embed.addFields({ name: '🎯 Hedef', value: String(target).slice(0, 200), inline: false });
+  if (detail) embed.addFields({ name: '🛡️ Bilgi', value: String(detail).slice(0, 500), inline: false });
+  embed.addFields({ name: '🕒 Zaman', value: trDate(), inline: false });
   try {
     await ch.send({ embeds: [embed] });
     return true;
   } catch (err) {
-    logger.error('Guard panel-access logu gönderilemedi.', err);
+    logger.error('Guard komut logu gönderilemedi.', err);
     return false;
   }
 }
@@ -250,5 +263,6 @@ module.exports = {
   sendAllowedLog,
   sendConfigLog,
   sendListViewLog,
+  sendCommandLog,
   _channelCache: channelCache,
 };

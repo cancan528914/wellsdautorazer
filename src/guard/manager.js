@@ -11,8 +11,10 @@ const { GUARD_ACTION, CATEGORY_LABEL, DEDUPE_TTL_MS } = require('./constants');
 const { findExecutor } = require('./audit');
 const { levelOf, isAllowed } = require('./permissions');
 const { isBotAction } = require('./tracker');
+const { seenAuditEntry, seenCombo } = require('./dedupe');
 const { punishExecutor, beginPunish, endPunish } = require('./punishment');
-const { sendBanLog, sendUnresolvedLog, sendAllowedLog } = require('./logger');
+const { sendUnresolvedLog } = require('./logger');
+const { queueIncidentLog, targetKindFor } = require('./incidentLog');
 const { noteEvent } = require('./health');
 const { recordIncident, markIncidentPunished } = require('./incidents');
 const db = require('../database/database');
@@ -93,10 +95,26 @@ async function handleGuardEvent({ client, guild, action, targetId, targetDesc, d
     const settings = db.getGuardSettings(guild.id);
     if (!settings?.enabled) return { handled: false, reason: 'disabled' };
 
-    // 1. Executor'ı audit logdan doğrula (önceden çözülmüşse tekrar çekme)
-    const found = resolved || (await findExecutor(guild, def.audit, targetId, auditOpts));
+    // 1a. ÖNCE internal action kontrolü: botun kendi işlemi audit'e
+    // gitmeden elenir (audit çağrısı YOK, log YOK — self-loop'un kökü).
+    if (isBotAction(guild.id, def.audit, String(targetId))) {
+      return { handled: false, reason: 'self' };
+    }
+
+    // 1b. Executor'ı audit logdan doğrula (önceden çözülmüşse tekrar çekme).
+    // Bulunamazsa TEK kısa retry (§7): başarılı olursa akışa devam edilir,
+    // log SADECE en sonda (throttle'lı) atılır — retry başına log YOK.
+    let found = resolved || (await findExecutor(guild, def.audit, targetId, auditOpts));
+    if (!found) {
+      await new Promise((r) => setTimeout(r, 700));
+      found = await findExecutor(guild, def.audit, targetId, { ...auditOpts, attempts: 1 }).catch(() => null);
+    }
     noteEvent(action, !!found);
     if (!found) {
+      // Executor bilinmiyor: incident'a bağlanamaz → throttle'lı TEK unverified log.
+      if (seenCombo(guild.id, 'unknown', action, String(targetId))) {
+        return { handled: true, punished: false, reason: 'unresolved-throttled' };
+      }
       logger.warn(`Guard: executor doğrulanamadı (${def.label} → ${targetId}). Ceza yok.`);
       await sendUnresolvedLog(guild, {
         actionLabel: def.label,
@@ -108,7 +126,24 @@ async function handleGuardEvent({ client, guild, action, targetId, targetDesc, d
     const { executor, entry } = found;
     const execId = String(executor.id);
 
-    // 2. Botun kendi işlemi / sahip → yoksay
+    // 1c. Aynı audit kaydı iki kez işlenmez (§11-12).
+    try {
+      if (entry?.id && seenAuditEntry(guild.id, entry.id)) {
+        return { handled: true, punished: false, reason: 'duplicate-entry' };
+      }
+    } catch {
+      /* dedup hatası akışı engellemez */
+    }
+    // 1d. actor+action+target ikinci katman (§11).
+    try {
+      if (seenCombo(guild.id, execId, action, String(targetId))) {
+        return { handled: true, punished: false, reason: 'duplicate-combo' };
+      }
+    } catch {
+      /* dedup hatası akışı engellemez */
+    }
+
+    // 2. Botun kendi işlemi / sahip → yoksay (tracker-first'in yedeği)
     const botId = String(client?.user?.id || '');
     if ((botId && execId === botId) || executor.bot || isBotAction(guild.id, def.audit, String(targetId))) {
       return { handled: false, reason: 'self' };
@@ -121,16 +156,8 @@ async function handleGuardEvent({ client, guild, action, targetId, targetDesc, d
     // 3. Whitelist kontrolü (registry: açık izin seti)
     const level = levelOf(guild.id, execId);
     if (isAllowed(level, def.category)) {
-      // URL Guard: sessiz değil, YEŞİL internal kayıt (ban logu değil)
-      if (level === 4) {
-        const { LEVEL_META } = require('./constants');
-        await sendAllowedLog(guild, {
-          executor: { id: execId, tag: executor.tag },
-          levelLabel: `${LEVEL_META[4].emoji} ${LEVEL_META[4].label}`,
-          actionLabel: def.label,
-          targetDesc,
-        }).catch(() => {});
-      }
+      // İzinli işlem: log kanalına DEĞİL, console'a iç kayıt (§14).
+      logger.info(`Guard: izinli işlem (${def.label} → ${execId}, seviye ${level}).`);
       return { handled: false, reason: 'allowed' };
     }
 
@@ -143,8 +170,6 @@ async function handleGuardEvent({ client, guild, action, targetId, targetDesc, d
     // 3c. Incident: aynı saldırganın 5dk penceresindeki işlemleri gruplanır.
     // Bu incidentte zaten ban yediyse tekrar ban atılmaz (rollback+log devam eder).
     const incident = recordIncident(guild.id, execId, action, String(targetId));
-    const incidentInfo =
-      incident.count > 1 ? `🔗 Incident: ${incident.count} işlem (${incident.actions.join(', ')})` : null;
 
     // 4. Ban snapshot'ı ÖNCEDEN yakala (ban sonrası veri kaybolmasın)
     const execSnap = { id: execId, tag: executor.tag || 'Bilinmeyen', bot: !!executor.bot };
@@ -196,17 +221,28 @@ async function handleGuardEvent({ client, guild, action, targetId, targetDesc, d
       endPunish(guild.id, execId);
     }
 
-    // 6. Log (ban BAŞARILI → BANNED, değilse → THREAT DETECTED)
-    await sendBanLog(guild, {
-      executor: execSnap,
-      actionLabel: def.label,
-      guardLabel: CATEGORY_LABEL[def.category] || def.category,
-      targetDesc,
-      punishment,
-      rollback,
-      sensitive,
-      incident: incidentInfo,
-    }).catch(() => {});
+    // 6. Log TEK incident kuyruğuna gider (doğrudan sendBanLog YOK — §2, §15).
+    // punish + rollback yukarıda ZATEN uygulandı; burada sadece incident detayı
+    // birikir, pencere sonunda TEK embed atılır (incidentLog.logSent korumalı).
+    try {
+      queueIncidentLog(
+        guild,
+        execSnap,
+        {
+          action,
+          actionLabel: def.label,
+          guardLabel: CATEGORY_LABEL[def.category] || def.category,
+          targetId: String(targetId),
+          targetKind: targetKindFor(action),
+          targetDesc,
+          punishment,
+          rollback,
+          sensitive: !!sensitive,
+        },
+      );
+    } catch (err) {
+      logger.error('Guard incident kuyruk hatası (ceza/rollback ETKİLENMEDİ).', err);
+    }
 
     logger.success(`Guard: ${execSnap.tag} cezalandırıldı (${def.label}) — ban=${punishment.ok} rollback=${rollback?.ok ?? 'yok'}`);
     return { handled: true, punished: punishment.ok, rollback };

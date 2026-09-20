@@ -246,50 +246,56 @@ async function onChannelUpdate(client, oldChannel, newChannel) {
     if (isLogChannel(newChannel.guild, newChannel.id)) {
       await fixLogChannelPerms(newChannel.guild, newChannel);
     }
-    // Önce düz kanal düzenlemesi dene; overwrite değişimleri ayrı audit tipindedir
-    const probes = [
-      AuditLogEvent.ChannelUpdate,
-      AuditLogEvent.ChannelOverwriteCreate,
-      AuditLogEvent.ChannelOverwriteUpdate,
-      AuditLogEvent.ChannelOverwriteDelete,
-    ];
-    const actionByAudit = {
-      [AuditLogEvent.ChannelUpdate]: 'CHANNEL_UPDATE',
-      [AuditLogEvent.ChannelOverwriteCreate]: 'CHANNEL_OVERWRITE_CREATE',
-      [AuditLogEvent.ChannelOverwriteUpdate]: 'CHANNEL_OVERWRITE_UPDATE',
-      [AuditLogEvent.ChannelOverwriteDelete]: 'CHANNEL_OVERWRITE_DELETE',
-    };
-    let matched = null;
-    for (const auditType of probes) {
-      const found = await findExecutor(newChannel.guild, auditType, newChannel.id, { attempts: 2 });
-      if (found) {
-        matched = { auditType, ...found };
-        break;
+    // Tracker-first: botun kendi rollback adımları audit'e gitmeden elenir.
+    // (Overwrite rollback'leri de channelUpdate event'i üretir.)
+    try {
+      const { isBotAction } = require('./tracker');
+      if (
+        isBotAction(newChannel.guild.id, AuditLogEvent.ChannelUpdate, newChannel.id) ||
+        isBotAction(newChannel.guild.id, AuditLogEvent.ChannelOverwriteCreate, newChannel.id) ||
+        isBotAction(newChannel.guild.id, AuditLogEvent.ChannelOverwriteUpdate, newChannel.id) ||
+        isBotAction(newChannel.guild.id, AuditLogEvent.ChannelOverwriteDelete, newChannel.id)
+      ) {
+        return;
       }
+    } catch {
+      /* tracker hatası akışı engellemez */
     }
-    if (!matched) {
-      // Hiçbir audit eşleşmedi → manager zaten unresolved loglar; yine de tek çağrı yap
+    // Önce düz kanal düzenlemesi dene (tek lookup + kısa retry).
+    // Overwrite değişimleri tek turda, retriesiz yoklanır (en fazla 3 ek çağrı).
+    // NOT: overwrite değişimi de CHANNEL_UPDATE olarak işlenir; rollbackChannelUpdate
+    // izinleri de geri yazdığı için koruma kaybı yoktur (etiket hassasiyeti gider).
+    const matched = await findExecutor(newChannel.guild, AuditLogEvent.ChannelUpdate, newChannel.id, { attempts: 2 });
+    if (matched) {
       await handleGuardEvent({
         client,
         guild: newChannel.guild,
         action: 'CHANNEL_UPDATE',
         targetId: newChannel.id,
         targetDesc: channelLabel(newChannel),
+        resolved: { executor: matched.executor, entry: matched.entry },
         doRollback: () => rollbackChannelUpdate(newChannel.guild, oldChannel, newChannel),
       });
       return;
     }
-    // Eşleşen audit tipine göre aksiyon; rollback yalnızca düz update için
-    const action = actionByAudit[matched.auditType] || 'CHANNEL_UPDATE';
+    const owTypes = [AuditLogEvent.ChannelOverwriteCreate, AuditLogEvent.ChannelOverwriteUpdate, AuditLogEvent.ChannelOverwriteDelete];
+    let owMatched = null;
+    for (const auditType of owTypes) {
+      const found = await findExecutor(newChannel.guild, auditType, newChannel.id, { attempts: 1 });
+      if (found) {
+        owMatched = found;
+        break;
+      }
+    }
+    // Hiçbir audit eşleşmedi → manager throttle'lı unresolved işler; yine de tek çağrı yap
     await handleGuardEvent({
       client,
       guild: newChannel.guild,
-      action,
+      action: 'CHANNEL_UPDATE',
       targetId: newChannel.id,
       targetDesc: channelLabel(newChannel),
-      resolved: { executor: matched.executor, entry: matched.entry },
-      doRollback:
-        action === 'CHANNEL_UPDATE' ? () => rollbackChannelUpdate(newChannel.guild, oldChannel, newChannel) : null,
+      ...(owMatched ? { resolved: { executor: owMatched.executor, entry: owMatched.entry } } : {}),
+      doRollback: () => rollbackChannelUpdate(newChannel.guild, oldChannel, newChannel),
     });
   } catch (err) {
     logger.error('Guard onChannelUpdate failed.', err);

@@ -7,7 +7,7 @@ const config = require('../config');
 const { buildErrorEmbed } = require('../utils/embeds');
 const { getGuardLevel, removeGuard } = require('../database/database');
 const { canManageGuard } = require('../guard/permissions');
-const { sendConfigLog } = require('../guard/logger');
+const { sendCommandLog } = require('../guard/logger');
 const { LEVEL_META } = require('../guard/constants');
 const logger = require('../utils/logger');
 
@@ -34,12 +34,11 @@ module.exports = {
       const deleted = removeGuard(interaction.guildId, user.id);
       if (deleted) {
         logger.success(`Guard whitelistten çıkarıldı: ${user.tag}`);
-        await sendConfigLog(interaction.guild, {
-          executor: interaction.user,
-          action: '/guardçıkar',
-          target: `<@${user.id}>`,
-          detail: `Eski Seviye: ${oldLabel}`,
-          resultOk: true,
+        await sendCommandLog(interaction.guild, {
+          user: interaction.user,
+          command: '/guardçıkar',
+          target: `<@${user.id}>\nID: \`${user.id}\``,
+          detail: `Kaldırılan Guard: ${oldLabel}`,
         }).catch(() => {});
         const embed = new EmbedBuilder()
           .setColor(config.colors?.guardConfig ?? 0x3498db)
