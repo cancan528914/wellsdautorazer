@@ -85,6 +85,14 @@ module.exports = {
       logger.error('Guard durumu okunamadı.', err);
     }
 
+    // Çekilişler: aktif kayıtları geri yükle (timer + süresi dolmuşları kapat)
+    try {
+      const { restoreGiveaways } = require('../handlers/giveawayHandler');
+      await restoreGiveaways(client);
+    } catch (err) {
+      logger.error('Çekiliş geri yüklenirken hata.', err);
+    }
+
     // Kapı kanıtı: bu satır yoksa çalışan bot ESKİ koddur (restart gerekli)
     try {
       const n = (config.globalAllowedRoleIds || []).length;

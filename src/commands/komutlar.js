@@ -35,6 +35,12 @@ const GROUPS = [
     ],
   },
   {
+    title: '🎉 Çekiliş',
+    commands: [
+      ['/çekiliş', 'Ödüllü çekiliş başlatır (🎉 tepkisiyle katılım, otomatik sonuç)'],
+    ],
+  },
+  {
     title: '🔊 Ses',
     commands: [
       ['/sesgir', 'Botu ses kanalına sokar (kalır)'],

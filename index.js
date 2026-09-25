@@ -16,6 +16,8 @@ const messageEvent = require('./src/events/messageCreate');
 const memberRemoveEvent = require('./src/events/guildMemberRemove');
 const memberAddEvent = require('./src/events/guildMemberAdd');
 const memberUpdateEvent = require('./src/events/guildMemberUpdate');
+const reactionAddEvent = require('./src/events/messageReactionAdd');
+const reactionRemoveEvent = require('./src/events/messageReactionRemove');
 const guardEvents = require('./src/guard/events');
 
 // --- Global crash koruması: bot hiçbir durumda crash olmamalı ---
@@ -88,11 +90,12 @@ async function main() {
       GatewayIntentBits.GuildMembers, // /dmmesaj üye listesi için zorunlu (Developer Portal'da SERVER MEMBERS INTENT açın)
       GatewayIntentBits.GuildMessages, // /clear + IC kanal takibi için
       GatewayIntentBits.GuildVoiceStates, // ses kanalı bağlantısı için zorunlu (VOICE_STATE_UPDATE almadan voice Ready olmaz)
+      GatewayIntentBits.GuildMessageReactions, // çekiliş 🎉 katılım takibi için zorunlu
       // IC isim içeriğini anında okumak için. Portal'da MESSAGE CONTENT INTENT açılmalı;
       // kapalıysa bot API'den çekmeye devam eder (biraz daha yavaş).
       GatewayIntentBits.MessageContent,
     ],
-    partials: [Partials.GuildMember, Partials.Channel, Partials.User],
+    partials: [Partials.GuildMember, Partials.Channel, Partials.User, Partials.Message, Partials.Reaction],
     rest: buildRestOptions(),
   });
 
@@ -112,6 +115,8 @@ async function main() {
   client.on(memberRemoveEvent.name, (m) => memberRemoveEvent.execute(m));
   client.on(memberAddEvent.name, (m) => memberAddEvent.execute(m));
   client.on(memberUpdateEvent.name, (o, n) => memberUpdateEvent.execute(o, n));
+  client.on(reactionAddEvent.name, (r, u) => reactionAddEvent.execute(r, u));
+  client.on(reactionRemoveEvent.name, (r, u) => reactionRemoveEvent.execute(r, u));
   // Guard izleme (her listener kendi hatasını yutar; mevcut sistemler etkilenmez)
   client.on('roleCreate', (r) => guardEvents.onRoleCreate(client, r));
   client.on('roleDelete', (r) => guardEvents.onRoleDelete(client, r));

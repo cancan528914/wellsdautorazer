@@ -10,6 +10,8 @@
  * - transcripts: ticket kapanışında oluşturulan transcript kayıtları.
  * - transcript_messages: transcript'e ait mesaj snapshot'ları.
  * - transcript_users: transcript'e ait kullanıcı snapshot'ları.
+ * - giveaways: çekiliş kayıtları (endAt ile restart-safe zamanlama).
+ * - giveaway_participants: çekiliş katılımcıları (giveaway başına kullanıcı tek satır).
  */
 const SCHEMA = `
 PRAGMA journal_mode = WAL;
@@ -246,6 +248,38 @@ CREATE TABLE IF NOT EXISTS transcript_attachments (
 );
 
 CREATE INDEX IF NOT EXISTS idx_transcript_attach_transcript ON transcript_attachments (transcript_id);
+
+CREATE TABLE IF NOT EXISTS giveaways (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  guild_id         TEXT NOT NULL,
+  channel_id       TEXT NOT NULL,
+  panel_message_id TEXT,
+  prize            TEXT NOT NULL,
+  duration_sec     INTEGER NOT NULL,
+  end_at           INTEGER NOT NULL,
+  winner_count     INTEGER NOT NULL DEFAULT 1,
+  max_participants INTEGER NOT NULL DEFAULT 0,
+  required_role_id TEXT,
+  host_id          TEXT NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'ending', 'ended', 'cancelled')),
+  winners          TEXT NOT NULL DEFAULT '[]',
+  excluded         TEXT NOT NULL DEFAULT '[]',
+  result_message_id TEXT,
+  created_at       INTEGER NOT NULL,
+  ended_at         INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_giveaways_status ON giveaways (status, end_at);
+CREATE INDEX IF NOT EXISTS idx_giveaways_guild ON giveaways (guild_id, status);
+
+CREATE TABLE IF NOT EXISTS giveaway_participants (
+  giveaway_id INTEGER NOT NULL REFERENCES giveaways (id) ON DELETE CASCADE,
+  user_id     TEXT NOT NULL,
+  joined_at   INTEGER NOT NULL,
+  PRIMARY KEY (giveaway_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_giveaway_participants_giveaway ON giveaway_participants (giveaway_id);
 `;
 
 module.exports = { SCHEMA };

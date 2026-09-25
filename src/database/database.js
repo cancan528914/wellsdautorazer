@@ -275,6 +275,20 @@ module.exports = {
   updateTranscriptStatus,
   deleteTranscript,
   listTranscriptsByGuild,
+  // --- Çekiliş sistemi ---
+  createGiveaway,
+  getGiveaway,
+  getGiveawayByMessage,
+  getActiveGiveaways,
+  setGiveawayPanelMessage,
+  setGiveawayResultMessage,
+  addGiveawayParticipant,
+  removeGiveawayParticipant,
+  getGiveawayParticipants,
+  countGiveawayParticipants,
+  claimGiveawayFinalize,
+  finishGiveaway,
+  updateGiveawayWinners,
 };
 
 // ---------- Ticket kayıtları ----------
@@ -955,5 +969,168 @@ function listTranscriptsByGuild(guildId, options = {}) {
   } catch (err) {
     logger.error(`[DB] listTranscriptsByGuild failed: ${guildId}`, err);
     return [];
+  }
+}
+
+// ---------- Çekiliş kayıtları ----------
+
+function createGiveaway({ guildId, channelId, prize, durationSec, endAt, winnerCount, maxParticipants, requiredRoleId, hostId }) {
+  try {
+    const res = getDb()
+      .prepare(
+        `INSERT INTO giveaways (guild_id, channel_id, panel_message_id, prize, duration_sec, end_at, winner_count, max_participants, required_role_id, host_id, status, winners, excluded, result_message_id, created_at, ended_at)
+         VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 'active', '[]', '[]', NULL, ?, NULL)`,
+      )
+      .run(
+        String(guildId),
+        String(channelId),
+        String(prize).slice(0, 200),
+        Number(durationSec),
+        Number(endAt),
+        Math.max(1, Number(winnerCount) || 1),
+        Math.max(0, Number(maxParticipants) || 0),
+        requiredRoleId ? String(requiredRoleId) : null,
+        String(hostId),
+        Date.now(),
+      );
+    return Number(res.lastInsertRowid);
+  } catch (err) {
+    logger.error(`[DB] createGiveaway failed: ${guildId}`, err);
+    throw err;
+  }
+}
+
+function getGiveaway(id) {
+  try {
+    return getDb().prepare('SELECT * FROM giveaways WHERE id = ?').get(Number(id)) || null;
+  } catch (err) {
+    logger.error(`[DB] getGiveaway failed: ${id}`, err);
+    return null;
+  }
+}
+
+/** Panel mesaj ID'sinden çekilişi bul (reaksiyon/buton çözümleme için). */
+function getGiveawayByMessage(messageId) {
+  try {
+    return (
+      getDb().prepare("SELECT * FROM giveaways WHERE panel_message_id = ? AND status IN ('active', 'ending')").get(String(messageId)) ||
+      null
+    );
+  } catch (err) {
+    logger.error(`[DB] getGiveawayByMessage failed: ${messageId}`, err);
+    return null;
+  }
+}
+
+function getActiveGiveaways() {
+  try {
+    return getDb().prepare("SELECT * FROM giveaways WHERE status = 'active' ORDER BY end_at ASC").all();
+  } catch (err) {
+    logger.error('[DB] getActiveGiveaways failed.', err);
+    return [];
+  }
+}
+
+function setGiveawayPanelMessage(id, panelMessageId) {
+  try {
+    getDb().prepare('UPDATE giveaways SET panel_message_id = ? WHERE id = ?').run(String(panelMessageId), Number(id));
+  } catch (err) {
+    logger.error(`[DB] setGiveawayPanelMessage failed: ${id}`, err);
+  }
+}
+
+function setGiveawayResultMessage(id, resultMessageId) {
+  try {
+    getDb().prepare('UPDATE giveaways SET result_message_id = ? WHERE id = ?').run(String(resultMessageId), Number(id));
+  } catch (err) {
+    logger.error(`[DB] setGiveawayResultMessage failed: ${id}`, err);
+  }
+}
+
+/**
+ * Katılımcı ekler. Dönüş: { added: boolean, count: number }.
+ * INSERT OR IGNORE sayesinde aynı kullanıcı iki kez sayılmaz.
+ */
+function addGiveawayParticipant(giveawayId, userId) {
+  try {
+    const db = getDb();
+    const res = db
+      .prepare('INSERT OR IGNORE INTO giveaway_participants (giveaway_id, user_id, joined_at) VALUES (?, ?, ?)')
+      .run(Number(giveawayId), String(userId), Date.now());
+    const row = db.prepare('SELECT COUNT(*) AS c FROM giveaway_participants WHERE giveaway_id = ?').get(Number(giveawayId));
+    return { added: Number(res.changes) > 0, count: Number(row?.c || 0) };
+  } catch (err) {
+    logger.error(`[DB] addGiveawayParticipant failed: ${giveawayId}/${userId}`, err);
+    throw err;
+  }
+}
+
+function removeGiveawayParticipant(giveawayId, userId) {
+  try {
+    const db = getDb();
+    const res = db.prepare('DELETE FROM giveaway_participants WHERE giveaway_id = ? AND user_id = ?').run(Number(giveawayId), String(userId));
+    const row = db.prepare('SELECT COUNT(*) AS c FROM giveaway_participants WHERE giveaway_id = ?').get(Number(giveawayId));
+    return { removed: Number(res.changes) > 0, count: Number(row?.c || 0) };
+  } catch (err) {
+    logger.error(`[DB] removeGiveawayParticipant failed: ${giveawayId}/${userId}`, err);
+    throw err;
+  }
+}
+
+function getGiveawayParticipants(giveawayId) {
+  try {
+    return getDb()
+      .prepare('SELECT user_id FROM giveaway_participants WHERE giveaway_id = ? ORDER BY joined_at ASC')
+      .all(Number(giveawayId))
+      .map((r) => String(r.user_id));
+  } catch (err) {
+    logger.error(`[DB] getGiveawayParticipants failed: ${giveawayId}`, err);
+    return [];
+  }
+}
+
+function countGiveawayParticipants(giveawayId) {
+  try {
+    const row = getDb().prepare('SELECT COUNT(*) AS c FROM giveaway_participants WHERE giveaway_id = ?').get(Number(giveawayId));
+    return Number(row?.c || 0);
+  } catch (err) {
+    logger.error(`[DB] countGiveawayParticipants failed: ${giveawayId}`, err);
+    return 0;
+  }
+}
+
+/**
+ * Sonuçlandırmayı sahiplen (çift finalize engeli).
+ * Sadece status='active' ise 'ending' yapar. Dönüş: true = kilit alındı.
+ */
+function claimGiveawayFinalize(id) {
+  try {
+    const res = getDb().prepare("UPDATE giveaways SET status = 'ending' WHERE id = ? AND status = 'active'").run(Number(id));
+    return Number(res.changes) > 0;
+  } catch (err) {
+    logger.error(`[DB] claimGiveawayFinalize failed: ${id}`, err);
+    return false;
+  }
+}
+
+function finishGiveaway(id, winners, excluded) {
+  try {
+    getDb()
+      .prepare("UPDATE giveaways SET status = 'ended', winners = ?, excluded = ?, ended_at = ? WHERE id = ?")
+      .run(JSON.stringify(winners || []), JSON.stringify(excluded || []), Date.now(), Number(id));
+  } catch (err) {
+    logger.error(`[DB] finishGiveaway failed: ${id}`, err);
+    throw err;
+  }
+}
+
+function updateGiveawayWinners(id, winners, excluded) {
+  try {
+    getDb()
+      .prepare('UPDATE giveaways SET winners = ?, excluded = ? WHERE id = ?')
+      .run(JSON.stringify(winners || []), JSON.stringify(excluded || []), Number(id));
+  } catch (err) {
+    logger.error(`[DB] updateGiveawayWinners failed: ${id}`, err);
+    throw err;
   }
 }

@@ -45,6 +45,12 @@ async function handleButton(interaction) {
     return ticketHandler.handleTicketButton(interaction);
   }
 
+  // Çekiliş reroll butonu: giveaway_reroll:<id> (restart-safe, DB'den çözülür)
+  if (typeof customId === 'string' && customId.startsWith('giveaway_reroll:')) {
+    const { handleReroll } = require('./giveawayHandler');
+    return handleReroll(interaction);
+  }
+
   // IC onay + mazeret butonları
   if (customId === 'ic_approve' || customId === 'ic_reject') {
     return handleIcButton(interaction);
