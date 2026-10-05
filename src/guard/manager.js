@@ -114,20 +114,15 @@ async function handleGuardEvent({ client, guild, action, targetId, targetDesc, d
     }
     noteEvent(action, !!found);
     if (!found) {
-      // Executor bilinmiyor: incident'a bağlanamaz → throttle'lı TEK unverified log.
+      // Executor doğrulanamadı → henüz ihlal olduğu bile BİLİNMİYOR.
+      // Bu bir "tespit" değil, sadece "bilgi eksik" durumudur.
+      // Bu yüzden guard-log'a İHLAL YAZILMAZ (aksi halde her audit kaçışında
+      // yanlış alarm üretilir ve rol-log/kanal-log çift kayıtları oluşur).
+      // Sadece konsola yazılır; gerçek ihlal audit'e bağlanınca (aşağıda) loglanır.
       if (seenCombo(guild.id, 'unknown', action, String(targetId))) {
         return { handled: true, punished: false, reason: 'unresolved-throttled' };
       }
-      logger.warn(`Guard: executor doğrulanamadı (${def.label} → ${targetId}). Ceza yok.`);
-      await sendGuardLog({
-        guild,
-        title: 'Yetkisiz İşlem Tespit Edildi (Doğrulanamadı)',
-        action: `${def.label} — ${targetDesc}`,
-        detail: 'Audit Log\'da işlem/hedef/zaman eşleşmesi bulunamadı. Güvenlik gereği ceza uygulanmadı.',
-        status: { ok: true, text: '⚠️ Ceza uygulanmadı (doğrulanamadı)' },
-        color: 0xe67e22,
-        note: `Hedef ID: ${targetId}`,
-      }).catch(() => {});
+      logger.debug(`Guard: executor doğrulanamadı (${def.label} → ${targetId}) — ihlal teyidi yok, ceza yok.`);
       return { handled: true, punished: false, reason: 'unresolved' };
     }
     const { executor, entry } = found;

@@ -14,7 +14,7 @@ const { SlashCommandBuilder, EmbedBuilder, MessageFlags, PermissionFlagsBits } =
 const config = require('../config');
 const { buildErrorEmbed } = require('../utils/embeds');
 const { canManageGuard } = require('../guard/permissions');
-const { ensureAllLogChannels } = require('../guard/logChannels');
+const { ensureAllLogChannels, invalidateLogChannel } = require('../guard/logChannels');
 const { sendGuardLog } = require('../guard/logService');
 const { LOG_CHANNELS } = require('../guard/constants');
 const { getGuardLogChannels } = require('../../src/database/database');
@@ -52,8 +52,11 @@ module.exports = {
         });
       }
 
-      // İdempotent kurulum
+      // İdempotent kurulum (kanal oluşturma/izin onarımının TEK yeri)
       const result = await ensureAllLogChannels(guild);
+
+      // Kurulum sonrası önbelleği temizle (yeni kanallar hemen kullanılsın)
+      invalidateLogChannel(guild.id);
 
       if (result.error === 'bot-permission') {
         return interaction.editReply({

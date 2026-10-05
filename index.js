@@ -222,6 +222,26 @@ async function main() {
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+
+  // --- Guard log mimarisi: periyodik temizlik (memory leak koruması) ---
+  // internalOps ve logService önbellekleri TTL ile kendini temizler; bu
+  // periyodik sweep süresi dolmuş kayıtları erkenden siler.
+  try {
+    const { sweepOps } = require('./src/guard/internalOps');
+    const logService = require('./src/guard/logService');
+    const cleanup = setInterval(() => {
+      sweepOps();
+      logService.sweepGroups();
+    }, 60000);
+    if (typeof cleanup.unref === 'function') cleanup.unref();
+  } catch (err) {
+    logger.warn(`Guard temizlik zamanlayıcısı kurulamadı: ${err.message}`);
+  }
+
+  // Guard debug modu (terminale yazar, ASLA log kanalına yazmaz)
+  if (String(process.env.GUARD_DEBUG || '').toLowerCase() === 'true') {
+    logger.warn('GUARD_DEBUG=AÇIK — event akışı terminale yazılıyor (üretimde kapatın).');
+  }
 }
 
 main().catch((err) => {

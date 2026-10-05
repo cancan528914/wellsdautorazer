@@ -32,7 +32,7 @@ const { buildLogEmbed, buildGuardActionEmbed, buildGroupEmbed } = require('./log
 // Non-critical kanallar için olay toplama penceresi.
 const GROUP_WINDOW_MS = 8000;
 const MAX_GROUP_ITEMS = 25;
-// `${guildId}:${logType}` -> { timer, entries, flushFn }
+// `${guildId}:${logType}` -> { timer, entries, flushFn, flushing }
 const pendingGroups = new Map();
 
 /** Pending grup zamanlayıcılarını temizle (memory leak yok). */
@@ -61,14 +61,40 @@ function deliveryMode(logType) {
 
 /**
  * Audit Log'dan executor'ı doğrular.
- * Bulunamazsa null döner — çağıran "doğrulanamadı" olarak loglar (uydurma yok).
+ *
+ * GÜVENLİK: Yanlış kişiyi göstermemek için ÇOK KATMANLI eşleştirme:
+ *   1) Audit tipi parametreyle birebir aynı olmalı (findExecutor zaten filtreler)
+ *   2) Target ID birebir eşleşmeli (findExecutor zaten filtreler)
+ *   3) Zaman penceresi içinde olmalı (AUDIT_MATCH_WINDOW_MS — findExecutor kontrol eder)
+ *   4) Executor gerçek bir kullanıcı olmalı (entry.executorId dolu olmalı)
+ *   5) Entry action'ı beklenen audit tipiyle uyumlu olmalı (son savunma hattı)
+ *
+ * Herhangi bir katman tutmuyorsa null döner → çağıran "doğrulanamadı" yazar.
+ * ASLA uydurma executor.
  */
 async function verifyActor(guild, auditType, targetId) {
   if (!guild || !auditType || !targetId) return null;
   try {
-    const found = await findExecutor(guild, auditType, String(targetId), { attempts: AUDIT_RETRY_ATTEMPTS, delayMs: AUDIT_RETRY_DELAY_MS });
+    const found = await findExecutor(guild, auditType, String(targetId), {
+      attempts: AUDIT_RETRY_ATTEMPTS,
+      delayMs: AUDIT_RETRY_DELAY_MS,
+    });
     if (!found?.executor) return null;
-    return { executor: found.executor, entry: found.entry };
+
+    const entry = found.entry || null;
+    const executor = found.executor;
+
+    // Katman 4: executor gerçek mi?
+    const execId = String(executor.id || executor.user_id || '');
+    if (!/^\d{17,20}$/.test(execId)) return null;
+
+    // Katman 5: action uyumu (son savunma — yanlış tip eşleşmesini engeller)
+    if (entry?.action !== undefined && auditType !== undefined && entry.action !== auditType) {
+      logger.debug(`Audit eşleşmesi reddedildi: action ${entry.action} != beklenen ${auditType}`);
+      return null;
+    }
+
+    return { executor, entry };
   } catch (err) {
     logger.warn(`Audit doğrulama hatası (${auditType}): ${err.code || err.message}`);
     return null;
@@ -122,7 +148,7 @@ async function sendLog(p = {}) {
     return false;
   }
 
-  // 1) Kanal çöz (kayıp/ silinmişse otomatik onar)
+  // 1) Kanal çöz — SALT OKUNUR (kanal oluşturmaz/izin yazmaz → döngü yok)
   let channel = null;
   try {
     channel = await resolveLogChannel(guild, logType);
@@ -130,8 +156,8 @@ async function sendLog(p = {}) {
     logger.error(`Log kanalı çözülemedi (${logType}).`, err);
   }
   if (!channel || !channel.isTextBased?.()) {
-    // Kanala yazamıyoruz ama Guard çalışmaya devam eder.
-    logger.warn(`Log kanalı yok/erişilemez, log atlandı: ${logType} (${meta.name})`);
+    // Kanala yazamıyoruz ama Guard çalışmaya devam eder. Sonsuz retry YOK.
+    logger.warn(`Log kanalı yok/erişilemez, log atlandı: ${logType} (${meta.name}) — /guardlogsetup çalıştırın`);
     return false;
   }
 
@@ -144,18 +170,52 @@ async function sendLog(p = {}) {
     return false;
   }
 
-  // 3) Gönder (grup kontrolü burada)
+  // 3) Gönder — grup kontrolü + SINIRLI retry (sonsuz döngü YOK)
   try {
     if (deliveryMode(logType) === 'group') {
       queueGroup(guild, logType, p, channel);
       return true;
     }
-    await channel.send({ embeds: [embed] });
+    await sendWithRetry(channel, { embeds: [embed] }, logType);
     return true;
   } catch (err) {
     logger.error(`Log gönderilemedi (${logType}/${meta.name}): ${err.code || err.message}`);
     return false;
   }
+}
+
+/**
+ * Sınırlı, üstel backoff'lu gönderim.
+ *
+ * ⚠️ Neden retry sınırlı? Çünkü log gönderimi BAŞARISIZ olduğunda:
+ *   - Sonsuz retry → sonsuz REST çağrısı → bot kilitlenir
+ *   - Yeniden denemekte ısrar etmek → aynı hata → tekrar → tekrar
+ * En fazla 2 deneme, 500ms → 1500ms bekleme. Sonra VAZGEÇ (sessiz).
+ *
+ * @returns {Promise<void>} başarılıysa çözer
+ */
+async function sendWithRetry(channel, payload, logType, attempts = 2) {
+  let lastErr = null;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      await channel.send(payload);
+      return;
+    } catch (err) {
+      lastErr = err;
+      // Kalıcı hatalar: tekrar denemenin anlamı yok
+      const permanent = [403, 404, 401, 50013, 10003, 10008].includes(err?.status || err?.code);
+      if (permanent) {
+        logger.warn(`Log gönderilemedi (${logType}) kalıcı hata: ${err.code || err.status} — vazgeçildi`);
+        throw err;
+      }
+      if (i < attempts) {
+        const backoff = 500 * Math.pow(3, i - 1); // 500ms, 1500ms
+        logger.debug(`Log gönderimi başarısız (${logType}), ${backoff}ms sonra tekrar denenecek`);
+        await new Promise((r) => setTimeout(r, backoff));
+      }
+    }
+  }
+  throw lastErr || new Error('Log gönderilemedi');
 }
 
 /**
@@ -175,10 +235,17 @@ function queueGroup(guild, logType, p, channel) {
   g.lastAt = Date.now();
 
   // İlk kayıtta timer başlat (pencere sabit, kaymaz).
-  if (!g.timer) {
+  // `flushing` bayrağı aynı pencerenin İKİ KEZ gönderilmesini engeller.
+  if (!g.timer && !g.flushing) {
     g.timer = setTimeout(() => {
+      g.timer = null;
+      g.flushing = true;
       pendingGroups.delete(key);
-      flushGroup(guild, logType, g, channel).catch(() => {});
+      flushGroup(guild, logType, g, channel)
+        .catch(() => {})
+        .finally(() => {
+          g.flushing = false;
+        });
     }, GROUP_WINDOW_MS);
     if (typeof g.timer.unref === 'function') g.timer.unref();
   }
@@ -211,7 +278,7 @@ async function flushGroup(guild, logType, g, channel) {
     });
     const ch = channel?.isTextBased?.() ? channel : await resolveLogChannel(guild, logType);
     if (!ch) return false;
-    await ch.send({ embeds: [embed] });
+    await sendWithRetry(ch, { embeds: [embed] }, `${logType}:group`);
     logger.debug(`Guard log grubu gönderildi: ${logType} (${g.entries.length} olay)`);
     return true;
   } catch (err) {
@@ -239,7 +306,7 @@ async function sendGuardLog(p = {}) {
   }
   try {
     const embed = buildGuardActionEmbed({ ...p, logType: 'guard' });
-    await channel.send({ embeds: [embed] });
+    await sendWithRetry(channel, { embeds: [embed] }, 'guard');
     return true;
   } catch (err) {
     logger.error(`Guard sistem logu gönderilemedi: ${err.code || err.message}`);
@@ -328,6 +395,7 @@ module.exports = {
   queueGroup,
   flushGroup,
   compressEntry,
+  sendWithRetry,
   // test/diyagnostik
   _pendingGroups: pendingGroups,
   GROUP_WINDOW_MS,

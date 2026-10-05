@@ -19,6 +19,13 @@ const logger = {
   info(msg) {
     console.log(`${C.gray}[${timestamp()}]${C.reset} ${C.blue}[INFO]${C.reset} ${msg}`);
   },
+  // Teşhis seviyesi. Üretimde sessiz (spam yapmaz); GUARD_DEBUG gibi
+  // bayraklarla açılan akışlar sadece burayı kullanır.
+  debug(msg) {
+    if (process.env.LOG_DEBUG === 'true') {
+      console.log(`${C.gray}[${timestamp()}]${C.reset} ${C.gray}[DEBUG]${C.reset} ${msg}`);
+    }
+  },
   success(msg) {
     console.log(`${C.gray}[${timestamp()}]${C.reset} ${C.green}[OK]${C.reset} ${msg}`);
   },

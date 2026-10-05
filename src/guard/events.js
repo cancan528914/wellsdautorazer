@@ -26,7 +26,53 @@ const {
   rollbackWebhook,
   rollbackGuild,
 } = require('./rollback');
-const { getGuardSettings } = require('../database/database');
+const { isInternalOp, markInternalOp } = require('./internalOps');
+
+// ===== GUARD DEBUG (production kanalına ASLA spam atmaz; sadece terminale yazar) =====
+// Açmak için .env: GUARD_DEBUG=true
+const DEBUG_GUARD = String(process.env.GUARD_DEBUG || '').toLowerCase() === 'true';
+
+// ===== EVENT DEDUPLICATION =====
+// Discord aynı olayı nadiren iki kez yollar. Aynı guild+event+fark imzası
+// kısa pencerede tekrar gelirse eleriz.
+//
+// ⚠️ TTL NEDEN 15sn? Audit Log eşleştirmesi (findExecutor) 2-3 saniye
+// sürebilir. TTL bunun altında kalırsa ikinci event dedup'u geçer ve
+// DUPLICATE log yazar. 15sn: gerçek bir kullanıcı aynı değişikliği 15sn içinde
+// iki kez yaparsa elenir (bu doğru davranıştır), audit gecikmesi sorun çıkarmaz.
+const DEDUP_TTL_MS = 15000;
+const DEDUP_MAX = 1000;
+const seenEvents = new Map();
+
+/**
+ * Atomik dedup: kontrol + kayıt TEK ADIMDA yapılır.
+ *
+ * ⚠️ Neden atomik? İki aynı event PARALEL gelirse (await noktasında iki
+ * handler birbirini beklerken) ikisi de "ilk görüyorum" der ve ikisi de
+ * loglar. Kontrol ile kayıt arasında await olmadığı için bu yarış imkânsız.
+ *
+ * @returns {boolean} true ise BU olay daha önce işlendi → atla
+ */
+function isDuplicateEvent(guildId, eventType, signature) {
+  try {
+    const now = Date.now();
+    const key = `${guildId}:${eventType}:${signature}`;
+    const exp = seenEvents.get(key);
+    // Kayıt hemen yazılır (await YOK → yarış durumu yok)
+    seenEvents.set(key, now + DEDUP_TTL_MS);
+
+    if (seenEvents.size > DEDUP_MAX) {
+      const sorted = [...seenEvents.entries()].sort((a, b) => a[1] - b[1]);
+      for (const [k] of sorted.slice(0, seenEvents.size - DEDUP_MAX)) seenEvents.delete(k);
+    }
+    if (seenEvents.size % 50 === 0) {
+      for (const [k, e] of seenEvents) if (e <= now) seenEvents.delete(k);
+    }
+    return !!(exp && exp > now);
+  } catch {
+    return false;
+  }
+}
 
 /** Botun kritik rollerinden biri mi hedefte? (guard-yönetici rolleri + botun en üst rolü) */
 function isSensitiveTarget(guild, roleIds) {
@@ -45,21 +91,46 @@ function isSensitiveTarget(guild, roleIds) {
   }
 }
 
-/** Kanal guard log kanalı mı? (silinirse auto-heal, bozulursa izin onarımı) */
+/**
+ * Kanal bir guard log kanalı mı? (12 log kanalından biri veya guard-log)
+ * Yeni mimari: guard_log_channels tablosu tek doğruluk kaynağı.
+ */
 function isLogChannel(guild, channelId) {
   try {
     if (!guild || !channelId) return false;
-    const settings = getGuardSettings(guild.id);
-    return !!settings?.log_channel_id && String(settings.log_channel_id) === String(channelId);
+    const { getGuardLogChannels, getGuardLogChannel } = require('../database/database');
+    const recorded = getGuardLogChannel(guild.id, 'guard');
+    if (recorded && String(recorded) === String(channelId)) return true;
+    const map = getGuardLogChannels(guild.id);
+    for (const id of Object.values(map)) {
+      if (String(id) === String(channelId)) return true;
+    }
+    return false;
   } catch {
     return false;
   }
 }
 
+/**
+ * Log kanalı izinleri bozulduysa onarır — **DRIFT KONTROLLÜ**.
+ *
+ * ⚠️ ESKİ DÖNGÜ BURADAYDI:
+ *   Eski sürüm her channelUpdate'te permissionOverwrites.set() çağırıyordu →
+ *   bu channelUpdate üretiyordu → tekrar onarım → sonsuz döngü.
+ *
+ * YENİ: Sadece izinler GERÇEKTEN bozuksa dokunur, ve yazmadan önce
+ * internalOps ile işaretler (oluşacak event elenir).
+ */
 async function fixLogChannelPerms(guild, channel) {
   try {
     const me = guild.members?.me;
     if (!me) return;
+    // Drift kontrolü: izinler doğruysa HİÇBİR ŞEY yapma (döngü kaynağı buydu)
+    const { overwritesNeedFix } = require('./logChannels');
+    if (!overwritesNeedFix(channel, guild, me.id)) return;
+
+    // Yazmadan önce işaretle → oluşacak channelUpdate elenir (döngü kesilir)
+    markInternalOp(guild.id, 'perm', channel.id);
     await channel.permissionOverwrites
       .set([
         { id: guild.roles.everyone.id, deny: ['ViewChannel'] },
@@ -91,6 +162,9 @@ function channelLabel(ch) {
 async function onRoleCreate(client, role) {
   try {
     if (!role?.guild) return;
+    if (DEBUG_GUARD) console.log(`[GUARD DEBUG] ROLE CREATE: ${role.name} (${role.id})`);
+    // Botun kendi oluşturduğu rolü el (guard rollback'leri kendi rolünü siler/oluşturur)
+    if (isInternalOp(role.guild.id, 'create', role.id)) return;
     await handleGuardEvent({
       client,
       guild: role.guild,
@@ -116,6 +190,10 @@ async function onRoleCreate(client, role) {
 async function onRoleDelete(client, role) {
   try {
     if (!role?.guild) return;
+    if (DEBUG_GUARD) console.log(`[GUARD DEBUG] ROLE DELETE: ${role.name} (${role.id})`);
+    // Botun kendi sildiği/oluşturduğu rolü el
+    if (isInternalOp(role.guild.id, 'delete', role.id)) return;
+    if (isInternalOp(role.guild.id, 'create', role.id)) return;
     const snap = {
       name: role.name,
       color: role.color,
@@ -174,6 +252,13 @@ function diffRole(oldRole, newRole) {
 async function onRoleUpdate(client, oldRole, newRole) {
   try {
     if (!newRole?.guild) return;
+    if (DEBUG_GUARD) console.log(`[GUARD DEBUG] ROLE UPDATE: ${newRole.name} (${newRole.id})`);
+    // Botun kendi yaptığı izin/pozisyon değişikliğini el (rollback zinciri korunur)
+    if (isInternalOp(newRole.guild.id, 'perm', newRole.id)) return;
+    // Anlamlı değişiklik yoksa çık (partial güncelleme spam yapmaz)
+    const rdiff = diffRole(oldRole, newRole);
+    if (!rdiff) return;
+    if (isDuplicateEvent(newRole.guild.id, 'role:update', hashChannelChange(newRole.id, rdiff))) return;
     const snap = {
       name: oldRole.name,
       color: oldRole.color,
@@ -198,7 +283,7 @@ async function onRoleUpdate(client, oldRole, newRole) {
       title: 'ROL GÜNCELLENDİ',
       target: { kind: 'role', id: newRole.id, label: '🎭 Güncellenen Rol' },
       action: 'Rol güncellendi.',
-      note: diffRole(oldRole, newRole),
+      note: rdiff,
     }).catch(() => {});
   } catch (err) {
     logger.error('Guard onRoleUpdate failed.', err);
@@ -268,15 +353,30 @@ async function onGuildMemberUpdate(client, oldMember, newMember) {
       if (added.length) parts.push(`**Eklenen:** ${added.map((id) => `<@&${id}> \`${roleNameOf(id)}\``).join(', ')}`);
       if (removed.length) parts.push(`**Alınan:** ${removed.map((id) => `<@&${id}> \`${roleNameOf(id)}\``).join(', ')}`);
 
-      await logEvent({
-        guild: newMember.guild,
-        logType: 'member',
-        auditType: AuditLogEvent.MemberRoleUpdate,
-        targetId: newMember.id,
-        title: 'ÜYENİN ROLLERİ DEĞİŞTİ',
-        target: { kind: 'user', id: newMember.id, label: '🎯 Üye' },
-        action: parts.join('\n') || 'Rol değişikliği',
-      }).catch(() => {});
+      // ROL-LOG: Üyeye rol verilmesi/alınması ROL kanalına gider (gereksinim #9).
+      // Eklenen ve alınan AYRI log'lanır → "ROL VERİLDİ" / "ROL ALINDI" net olur.
+      if (added.length) {
+        await logEvent({
+          guild: newMember.guild,
+          logType: 'role',
+          auditType: AuditLogEvent.MemberRoleUpdate,
+          targetId: newMember.id,
+          title: 'ÜYEYE ROL VERİLDİ',
+          target: { kind: 'user', id: newMember.id, label: '🎯 Üye' },
+          action: added.map((id) => `<@&${id}> \`${roleNameOf(id)}\``).join(', '),
+        }).catch(() => {});
+      }
+      if (removed.length) {
+        await logEvent({
+          guild: newMember.guild,
+          logType: 'role',
+          auditType: AuditLogEvent.MemberRoleUpdate,
+          targetId: newMember.id,
+          title: 'ÜYEDEN ROL ALINDI',
+          target: { kind: 'user', id: newMember.id, label: '🎯 Üye' },
+          action: removed.map((id) => `<@&${id}> \`${roleNameOf(id)}\``).join(', '),
+        }).catch(() => {});
+      }
     }
 
     // Nickname / avatar değişimi → üye-log (rol değişiminden bağımsız çalışır)
@@ -392,10 +492,28 @@ async function onChannelDelete(client, channel) {
 async function onChannelUpdate(client, oldChannel, newChannel) {
   try {
     if (!newChannel?.guild || !GUILD_CHANNEL_TYPES.has(newChannel.type)) return;
-    // Log kanalı bozulduysa izinleri onar (normal Guard akışı aynen devam eder)
+
+    // ===== KATMAN 1: BOTUN KENDİ İŞLEMİ (döngü kırıcı) =====
+    // Bot bu kanalın izinlerini/parent'ını kendisi değiştirdiyse → eventi ELİMLE.
+    // Bu olmadan: log yaz → izin güncelle → channelUpdate → log → ... ♾️
+    if (isInternalOp(newChannel.guild.id, 'perm', newChannel.id)) return;
+    if (isInternalOp(newChannel.guild.id, 'create', newChannel.id)) return;
+
+    // Log kanalı izinleri bozulduysa onar — drift kontrollü + internalOp işaretli
     if (isLogChannel(newChannel.guild, newChannel.id)) {
       await fixLogChannelPerms(newChannel.guild, newChannel);
     }
+
+    // ===== KATMAN 2: ANLAMLI DEĞİŞİKLİK YOKSA ÇIKI =====
+    const diff = diffChannel(oldChannel, newChannel);
+    if (!diff) return; // hiçbir şey değişmemiş → log yok (spam yok)
+    if (DEBUG_GUARD) {
+      console.log(`[GUARD DEBUG] CHANNEL UPDATE: ${channelLabel(newChannel)} | değişiklikler:\n${diff}`);
+    }
+
+    // ===== KATMAN 3: DEDUP (aynı event iki kez gelirse) =====
+    const changeSig = hashChannelChange(newChannel.id, diff);
+    if (isDuplicateEvent(newChannel.guild.id, 'channel:update', changeSig)) return;
     // Tracker-first: botun kendi rollback adımları audit'e gitmeden elenir.
     // (Overwrite rollback'leri de channelUpdate event'i üretir.)
     try {
@@ -457,7 +575,7 @@ async function onChannelUpdate(client, oldChannel, newChannel) {
       title: 'KANAL GÜNCELLENDİ',
       target: { kind: 'channel', id: newChannel.id, label: '📁 Güncellenen Kanal' },
       action: 'Kanal güncellendi.',
-      note: diffChannel(oldChannel, newChannel),
+      note: diff,
       resolvedActor: matched?.executor,
     }).catch(() => {});
   } catch (err) {
@@ -465,29 +583,88 @@ async function onChannelUpdate(client, oldChannel, newChannel) {
   }
 }
 
-/** İki kanal arasındaki farkları okunur satırlara çevirir. */
+/**
+ * İki kanal arasındaki GERÇEK farkları okunur satırlara çevirir.
+ * @returns {string|null} değişiklik yoksa null (→ event yoksayılır)
+ */
 function diffChannel(oldCh, newCh) {
+  if (!oldCh || !newCh) return null;
   const lines = [];
   try {
     if (oldCh.name !== newCh.name) lines.push(`**Ad:** \`${oldCh.name}\` → \`${newCh.name}\``);
-    if ((oldCh.topic ?? null) !== (newCh.topic ?? null)) lines.push('**Konu (topic):** değiştirildi');
-    if ((oldCh.parentId ?? null) !== (newCh.parentId ?? null)) lines.push('**Kategori:** değiştirildi');
+    if ((oldCh.topic ?? null) !== (newCh.topic ?? null)) {
+      lines.push(`**Konu (topic):** \`${String(oldCh.topic ?? '—').slice(0, 60)}\` → \`${String(newCh.topic ?? '—').slice(0, 60)}\``);
+    }
+    if ((oldCh.parentId ?? null) !== (newCh.parentId ?? null)) {
+      lines.push(`**Kategori:** \`${oldCh.parentId ?? '—'}\` → \`${newCh.parentId ?? '—'}\``);
+    }
     const op = oldCh.rawPosition ?? oldCh.position;
     const np = newCh.rawPosition ?? newCh.position;
     if (op !== np) lines.push(`**Pozisyon:** \`${op}\` → \`${np}\``);
     if (oldCh.nsfw !== newCh.nsfw) lines.push(`**NSFW:** \`${oldCh.nsfw}\` → \`${newCh.nsfw}\``);
-    // overwrite değişikliği (yetki sızıntısı kritik)
+    // Metin kanalları
+    if ((oldCh.rateLimitPerUser ?? 0) !== (newCh.rateLimitPerUser ?? 0)) {
+      lines.push(`**Yavaş mod:** \`${oldCh.rateLimitPerUser ?? 0}\` → \`${newCh.rateLimitPerUser ?? 0}\` sn`);
+    }
+    // Ses kanalları
+    if ((oldCh.bitrate ?? null) !== (newCh.bitrate ?? null)) lines.push(`**Bit hızı:** \`${oldCh.bitrate}\` → \`${newCh.bitrate}\``);
+    if ((oldCh.userLimit ?? null) !== (newCh.userLimit ?? null)) {
+      lines.push(`**Kullanıcı limiti:** \`${oldCh.userLimit ?? 'sınırsız'}\` → \`${newCh.userLimit ?? 'sınırsız'}\``);
+    }
+    // Kanal türü (metin <-> ses dönüşümü)
+    if (oldCh.type !== newCh.type) lines.push(`**Tür:** \`${oldCh.type}\` → \`${newCh.type}\``);
+    // Permission overwrite — İÇERİK bazlı karşılaştırma (sayı değil, gerçek izinler)
     try {
-      const before = oldCh.permissionOverwrites?.cache?.size ?? 0;
-      const after = newCh.permissionOverwrites?.cache?.size ?? 0;
-      if (before !== after) lines.push(`**Kanal izinleri:** değiştirildi (${before} → ${after} overwrite)`);
+      const before = new Set(oldCh.permissionOverwrites?.cache?.values?.() || []);
+      const after = new Set(newCh.permissionOverwrites?.cache?.values?.() || []);
+      let changed = before.size !== after.size;
+      if (!changed) {
+        for (const ov of after) {
+          const oldOv = oldCh.permissionOverwrites.cache.get(ov.id);
+          if (!oldOv || !ov.allow.equals(oldOv.allow) || !ov.deny.equals(oldOv.deny)) {
+            changed = true;
+            break;
+          }
+        }
+      }
+      if (changed) lines.push(`**Kanal izinleri:** değiştirildi (${before.size} → ${after.size} overwrite)`);
     } catch {
-      /* overwrite cache yoksa atlanır */
+      /* overwrite cache/equals yoksa atlanır */
     }
   } catch {
     /* diff hatası kritik değil */
   }
   return lines.length ? lines.join('\n') : null;
+}
+
+/** Kanal/rol değişikliği için kısa imza (dedup anahtarı). */
+function hashChannelChange(targetId, diff) {
+  return hashChange(targetId, diff);
+}
+
+/**
+ * Değişiklik imzası (dedup anahtarı).
+ *
+ * ⚠️ DİKKAT — yanlış eleme YAPILMAZ:
+ *   Değerler (isim, topic, sayılar) ÖNEMLİDİR ve korunur. Sadece
+ *   değişken olmayan kısımlar (emoji, gereksiz boşluk) sadeleştirilir.
+ *   Böylece: aynı olay iki kez gelirse aynı imza → elenir;
+ *           farklı gerçek değişiklikler farklı imza → KORUNUR.
+ */
+function hashChange(targetId, diff) {
+  try {
+    // Yalnızca zaman damgası gibi değişken kısımları sadeleştir.
+    // Değerler (t1/t2, eski-ad/yeni-ad) KORUNUR — elenmemeli.
+    const norm = String(diff)
+      .replace(/\s+/g, ' ')
+      .trim();
+    let h = 0;
+    const s = `${targetId}|${norm}`;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return h.toString(36);
+  } catch {
+    return `${targetId}:${Date.now()}`;
+  }
 }
 
 async function onGuildBanAdd(client, ban) {
@@ -1168,4 +1345,7 @@ module.exports = {
   diffRole,
   diffChannel,
   diffGuild,
+  hashChange,
+  isDuplicateEvent,
+  isLogChannel,
 };
