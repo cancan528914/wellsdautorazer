@@ -63,17 +63,21 @@ async function checkAudit(guild) {
 
 async function checkLoggerDb(guild) {
   try {
-    const { getGuardSettings, listWhitelist } = require('../database/database');
+    const { getGuardSettings, listWhitelist, countGuardLogChannels, getGuardLogChannel } = require('../database/database');
+    const { LOG_CHANNELS } = require('./constants');
     if (!guild) {
       getGuardSettings('health-probe-never');
       return { ok: true, detail: 'DB + whitelist sorgusu OK' };
     }
     const settings = getGuardSettings(guild.id);
     listWhitelist(guild.id);
-    if (!settings?.log_channel_id) return { ok: false, detail: 'log kanalı ayarlı değil' };
-    const ch = await guild.channels.fetch(settings.log_channel_id).catch(() => null);
-    if (!ch?.isTextBased()) return { ok: false, detail: 'log kanalı bulunamadı' };
-    return { ok: true, detail: 'DB + log kanalı OK' };
+    // Yeni mimari: guard-log kanalı + toplam log kanalı sayısı raporlanır.
+    const guardLogId = getGuardLogChannel(guild.id, 'guard') || settings?.log_channel_id;
+    if (!guardLogId) return { ok: false, detail: 'guard-log kanalı ayarlı değil (/guardlogsetup)' };
+    const ch = await guild.channels.fetch(guardLogId).catch(() => null);
+    if (!ch?.isTextBased()) return { ok: false, detail: 'guard-log kanalı bulunamadı' };
+    const total = countGuardLogChannels(guild.id);
+    return { ok: true, detail: `DB OK • log kanalı: ${total}/${LOG_CHANNELS.length}` };
   } catch (err) {
     return { ok: false, detail: `hata: ${err.message}` };
   }

@@ -143,6 +143,16 @@ async function main() {
   client.on('stickerUpdate', (o, n) => guardEvents.onStickerUpdate(client, o, n));
   client.on('threadCreate', (t) => guardEvents.onThreadCreate(client, t));
   client.on('threadDelete', (t) => guardEvents.onThreadDelete(client, t));
+  // --- Yeni log mimarisi: mesaj / ses / davet / bot hareketleri (yalnızca log) ---
+  client.on('messageDelete', (m) => guardEvents.onMessageDelete(client, m));
+  client.on('messageDeleteBulk', (m) => guardEvents.onMessageDeleteBulk(client, m));
+  client.on('messageUpdate', (o, n) => guardEvents.onMessageUpdate(client, o, n));
+  client.on('voiceStateUpdate', (o, n) => guardEvents.onVoiceStateUpdate(client, o, n));
+  client.on('inviteCreate', (i) => guardEvents.onInviteCreate(client, i));
+  client.on('inviteDelete', (i) => guardEvents.onInviteDelete(client, i));
+  // Bot giriş/çıkışı → bot-log (normal üye girişi üye-log'da zaten var)
+  client.on('guildMemberAdd', (m) => guardEvents.onGuildMemberAdd(client, m));
+  client.on('guildMemberRemove', (m) => guardEvents.onGuildMemberRemoveBot(client, m));
 
   client.on('error', (err) => logger.error('Discord client error.', err));
   client.on('warn', (msg) => logger.warn(`Discord warning: ${msg}`));

@@ -152,6 +152,22 @@ CREATE TABLE IF NOT EXISTS guard_settings (
   updated_at     INTEGER NOT NULL
 );
 
+-- ===================== YENİ LOG MİMARİSİ =====================
+-- guard_log_channels: sunucu başına log kanal tipi -> kanal ID eşlemesi.
+-- /guardlogsetup idempotent çalışır: buradan okur, eksikleri oluşturur, geri yazar.
+-- NOT: Eski guard_settings.log_channel_id KORUNUR (geriye uyum / tek kanal modu).
+CREATE TABLE IF NOT EXISTS guard_log_channels (
+  guild_id    TEXT NOT NULL,
+  log_type    TEXT NOT NULL,
+  channel_id  TEXT NOT NULL,
+  category_id TEXT,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  PRIMARY KEY (guild_id, log_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_guard_log_channels_guild ON guard_log_channels (guild_id);
+
 -- ===================== TRANSCRIPT SYSTEM =====================
 
 CREATE TABLE IF NOT EXISTS transcripts (

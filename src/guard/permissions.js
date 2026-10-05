@@ -14,7 +14,7 @@
  */
 const config = require('../config');
 const { getGuardLevel } = require('../database/database');
-const { GUARD_ACTION, ROLE_ACTIONS, CHANNEL_ACTIONS, BANKICK_ACTIONS, FULL_TRUST_ACTIONS } = require('./constants');
+const { ROLE_ACTIONS, CHANNEL_ACTIONS, BANKICK_ACTIONS, FULL_TRUST_ACTIONS } = require('./constants');
 
 function levelOf(guildId, userId) {
   try {

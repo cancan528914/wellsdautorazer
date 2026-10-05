@@ -293,6 +293,12 @@ module.exports = {
   getGuardSettings,
   saveGuardSettings,
   countGuardGuilds,
+  // --- Yeni log kanal kayıtları ---
+  getGuardLogChannels,
+  getGuardLogChannel,
+  setGuardLogChannel,
+  deleteGuardLogChannel,
+  countGuardLogChannels,
   dbHealthy,
   closeDatabase,
   // --- Transcript sistemi ---
@@ -817,6 +823,78 @@ function countGuardGuilds() {
     return Number(row?.c || 0);
   } catch (err) {
     logger.error('[DB] countGuardGuilds failed.', err);
+    return 0;
+  }
+}
+
+// ---------- Yeni log mimarisi: kanal tipi -> kanal ID kayıtları ----------
+
+/** Sunucunun kayıtlı log kanal eşlemesi: { role: '123', channel: '456', ... } */
+function getGuardLogChannels(guildId) {
+  try {
+    const rows = getDb().prepare('SELECT log_type, channel_id FROM guard_log_channels WHERE guild_id = ?').all(String(guildId));
+    const out = {};
+    for (const r of rows) out[String(r.log_type)] = String(r.channel_id);
+    return out;
+  } catch (err) {
+    logger.error(`[DB] getGuardLogChannels failed: ${guildId}`, err);
+    return {};
+  }
+}
+
+/** Tek log tipinin kanal ID'si (yoksa null). */
+function getGuardLogChannel(guildId, logType) {
+  try {
+    const row = getDb()
+      .prepare('SELECT channel_id FROM guard_log_channels WHERE guild_id = ? AND log_type = ?')
+      .get(String(guildId), String(logType));
+    return row ? String(row.channel_id) : null;
+  } catch (err) {
+    logger.error(`[DB] getGuardLogChannel failed: ${guildId}/${logType}`, err);
+    return null;
+  }
+}
+
+/**
+ * Log kanal kaydı yaz (upsert).
+ * @param {string} guildId
+ * @param {string} logType  - constants.LOG_CHANNELS içindeki key
+ * @param {string} channelId
+ * @param {string|null} categoryId
+ */
+function setGuardLogChannel(guildId, logType, channelId, categoryId = null) {
+  try {
+    const now = Date.now();
+    getDb()
+      .prepare(
+        'INSERT INTO guard_log_channels (guild_id, log_type, channel_id, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ' +
+          'ON CONFLICT(guild_id, log_type) DO UPDATE SET channel_id = excluded.channel_id, category_id = excluded.category_id, updated_at = excluded.updated_at',
+      )
+      .run(String(guildId), String(logType), String(channelId), categoryId ? String(categoryId) : null, now, now);
+  } catch (err) {
+    logger.error(`[DB] setGuardLogChannel failed: ${guildId}/${logType}`, err);
+    throw err;
+  }
+}
+
+/** Kayıtlı log kanalını sil (kanal Discord'da silinmişse temizlik için). */
+function deleteGuardLogChannel(guildId, logType) {
+  try {
+    getDb()
+      .prepare('DELETE FROM guard_log_channels WHERE guild_id = ? AND log_type = ?')
+      .run(String(guildId), String(logType));
+  } catch (err) {
+    logger.error(`[DB] deleteGuardLogChannel failed: ${guildId}/${logType}`, err);
+  }
+}
+
+/** Sunucudaki toplam log kanalı sayısı (health/rapor için). */
+function countGuardLogChannels(guildId) {
+  try {
+    const row = getDb().prepare('SELECT COUNT(*) AS c FROM guard_log_channels WHERE guild_id = ?').get(String(guildId));
+    return Number(row?.c || 0);
+  } catch (err) {
+    logger.error(`[DB] countGuardLogChannels failed: ${guildId}`, err);
     return 0;
   }
 }

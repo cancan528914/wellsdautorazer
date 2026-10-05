@@ -4,17 +4,16 @@
  * - Bot permissionları + Audit Log + sistem health raporlar.
  * - Guard'ı bu sunucuda aktif eder. Kullanım config loguna yazılır.
  */
-const { SlashCommandBuilder, EmbedBuilder, ChannelType, PermissionFlagsBits, MessageFlags } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const config = require('../config');
 const { buildErrorEmbed } = require('../utils/embeds');
 const { getGuardSettings, saveGuardSettings, listWhitelist } = require('../database/database');
 const { canManageGuard } = require('../guard/permissions');
-const { sendCommandLog } = require('../guard/logger');
+const { sendGuardLog } = require('../guard/logService');
 const { checkHealth } = require('../guard/health');
 const { REQUIRED_PERMS } = require('../guard/constants');
 const logger = require('../utils/logger');
 
-const GUARD_LOG_NAME = 'guard-log';
 const tick = (ok) => (ok ? '🟢' : '🔴');
 
 module.exports = {
@@ -55,55 +54,20 @@ module.exports = {
         logger.warn(`Guard audit probe başarısız: ${err.code || err.message}`);
       }
 
-      // 3. Log kanalı: kayıtlı → isimden devral → oluştur (whitelist'e dokunulmaz)
-      let logChannel = null;
-      let logState = '';
+      // 3. Log altyapısı Raporu.
+      // Kanal OLUŞTURMA bu komutun işi değil — tek doğruluk kaynağı guard/logChannels.js
+      // (/guardlogsetup). Burada sadece mevcut altyapının durumu raporlanır.
       const settings = getGuardSettings(guild.id);
-      if (settings?.log_channel_id) {
-        const existing = await guild.channels.fetch(settings.log_channel_id).catch(() => null);
-        if (existing?.isTextBased()) {
-          logChannel = existing;
-          logState = 'korundu';
-        }
+      const { countGuardLogChannels, getGuardLogChannel } = require('../database/database');
+      const { LOG_CHANNELS } = require('../guard/constants');
+      const logChannelId = getGuardLogChannel(guild.id, 'guard') || settings?.log_channel_id || null;
+      const logChannel = logChannelId ? await guild.channels.fetch(logChannelId).catch(() => null) : null;
+      const logChannelCount = countGuardLogChannels(guild.id);
+      const logInfraReady = logChannelCount >= LOG_CHANNELS.length;
+      if (!logInfraReady) {
+        logger.warn(`Guard log altyapısı eksik: ${logChannelCount}/${LOG_CHANNELS.length} kanal. /guardlogsetup çalıştırılmalı.`);
       }
-      if (!logChannel && typeof guild.channels.cache?.find === 'function') {
-        const byName = guild.channels.cache.find((c) => c.name === GUARD_LOG_NAME && c.type === ChannelType.GuildText) || null;
-        if (byName) {
-          logChannel = byName;
-          logState = 'devralındı';
-        }
-      }
-      if (!logChannel) {
-        if (!me?.permissions?.has(PermissionFlagsBits.ManageChannels)) {
-          return interaction.editReply({
-            embeds: [buildErrorEmbed('Log kanalı oluşturamıyorum — bota **Kanalları Yönet** yetkisi verin ve tekrar deneyin.')],
-          });
-        }
-        try {
-          logChannel = await guild.channels.create({
-            name: GUARD_LOG_NAME,
-            type: ChannelType.GuildText,
-            topic: 'Javrex Bot System Guard kayıtları (otomatik kurulum)'.slice(0, 1024),
-            permissionOverwrites: [
-              { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-              {
-                id: me.id,
-                allow: [
-                  PermissionFlagsBits.ViewChannel,
-                  PermissionFlagsBits.SendMessages,
-                  PermissionFlagsBits.ReadMessageHistory,
-                  PermissionFlagsBits.EmbedLinks,
-                ],
-              },
-            ],
-          });
-          logState = 'oluşturuldu';
-        } catch (err) {
-          logger.error('Guard log kanalı oluşturulamadı.', err);
-          return interaction.editReply({ embeds: [buildErrorEmbed('Log kanalı oluşturulamadı — bot yetkilerini kontrol edin.')] });
-        }
-      }
-      saveGuardSettings(guild.id, { logChannelId: logChannel.id, enabled: true });
+      saveGuardSettings(guild.id, { logChannelId: logChannelId, enabled: true });
 
       // 4. Sistem health
       const health = await checkHealth(interaction.client, guild).catch(() => ({ ok: false, checks: [] }));
@@ -119,7 +83,7 @@ module.exports = {
         .addFields(
           { name: 'System', value: `${tick(!missing.length && auditOk)} ${missing.length || !auditOk ? 'EKSİKLERLE ONLINE' : 'ONLINE'}`, inline: false },
           { name: 'Audit Log', value: auditOk ? `${tick(true)} READY` : `${tick(false)} ERİŞİLEMİYOR`, inline: true },
-          { name: 'Logging', value: `${tick(true)} ENABLED (<#${logChannel.id}>)`, inline: true },
+          { name: 'Logging', value: logInfraReady ? `${tick(true)} ALTYAPI TAM (${logChannelCount}/${LOG_CHANNELS.length})` : `${tick(false)} EKSİK (${logChannelCount}/${LOG_CHANNELS.length}) — \`/guardlogsetup\``, inline: true },
           {
             name: 'Protection',
             value: `${tick(true)} ROLE\n${tick(true)} CHANNEL\n${tick(true)} BAN/KICK\n${tick(true)} URL`,
@@ -133,14 +97,16 @@ module.exports = {
         .setFooter({ text: `${config.botName} | Guard` })
         .setTimestamp();
 
-      await sendCommandLog(guild, {
-        user: interaction.user,
-        command: '/guardsetup',
-        target: `<#${logChannel.id}>`,
-        detail: `Guard sistemi yapılandırıldı (whitelist: ${wlCount})`,
+      await sendGuardLog({
+        guild,
+        title: 'Guard Sistemi Kuruldu',
+        action: '`/guardsetup` çalıştırıldı',
+        detail: `Guard yapılandırıldı • Whitelist: ${wlCount} kullanıcı • Log altyapısı: ${logChannelCount}/${LOG_CHANNELS.length} kanal`,
+        actor: { id: interaction.user.id },
+        status: { ok: true, text: 'Guard sistemi aktif' },
       }).catch(() => {});
 
-      logger.success(`Guard setup tamam: ${guild.name} (log: #${logChannel.name || logChannel.id})`);
+      logger.success(`Guard setup tamam: ${guild.name} (log altyapısı: ${logChannelCount}/${LOG_CHANNELS.length})`);
       return interaction.editReply({ embeds: [embed] });
     } catch (err) {
       logger.error('Interaction failed: /guardsetup.', err);

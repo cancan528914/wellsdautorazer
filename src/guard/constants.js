@@ -105,6 +105,51 @@ const REQUIRED_PERMS = [
   { flag: PermissionFlagsBits.EmbedLinks, label: 'Bağlantı Yerleştir (Embed)' },
 ];
 
+// ===================== LOG KANALLARI ENVANTERİ =====================
+// Yeni log mimarisinin TEK doğruluk kaynağı. /guardlogsetup bu listeyi okur,
+// DB'deki kayıtlarla eşleştirir, eksikleri oluşturur.
+// - key: kanal tipi (config/env anahtarı suffix'i ve DB log_type değeri)
+// - name: Discord kanal adı (kural: düşük harf, ASCII, tire)
+// - critical: true ise olay ASLA spam-gruplamaya girmez, tek tek kaydedilir
+const LOG_CHANNELS = [
+  { key: 'role', name: 'rol-log', label: 'Rol İşlemleri', emoji: '🎭', color: 0x9b59b6, critical: true },
+  { key: 'ban_kick', name: 'ban-kick-log', label: 'Ban / Kick', emoji: '🔨', color: 0xe74c3c, critical: true },
+  { key: 'channel', name: 'kanal-log', label: 'Kanal İşlemleri', emoji: '📁', color: 0x3498db, critical: true },
+  { key: 'message', name: 'mesaj-log', label: 'Mesaj İşlemleri', emoji: '💬', color: 0x95a5a6, critical: false },
+  { key: 'member', name: 'uye-log', label: 'Üye İşlemleri', emoji: '👤', color: 0x1abc9c, critical: false },
+  { key: 'bot', name: 'bot-log', label: 'Bot İşlemleri', emoji: '🤖', color: 0xe67e22, critical: true },
+  { key: 'guild', name: 'sunucu-log', label: 'Sunucu Ayarları', emoji: '🏛️', color: 0xf1c40f, critical: false },
+  { key: 'webhook', name: 'webhook-log', label: 'Webhook İşlemleri', emoji: '🪝', color: 0x8e44ad, critical: true },
+  { key: 'emoji_sticker', name: 'emoji-sticker-log', label: 'Emoji / Sticker', emoji: '😀', color: 0x16a085, critical: false },
+  { key: 'voice', name: 'ses-log', label: 'Ses Hareketleri', emoji: '🔊', color: 0x16a085, critical: false },
+  { key: 'invite', name: 'davet-log', label: 'Davet İşlemleri', emoji: '📨', color: 0xd35400, critical: true },
+  { key: 'guard', name: 'guard-log', label: 'Guard Sistem Hareketleri', emoji: '🛡️', color: 0xe74c3c, critical: true },
+];
+
+// Log kategorisi (tüm kanalların altında toplandığı üst kanal)
+const LOG_CATEGORY = { name: 'guard-logs', label: 'GUARD LOGS' };
+
+// key -> meta (hızlı erişim)
+const LOG_CHANNEL_MAP = new Map(LOG_CHANNELS.map((c) => [c.key, c]));
+
+// GRUP-SAFE kanallar (critical:false olanlar) — bunlar spam pencereyle toplanır.
+const GROUPABLE_LOG_KEYS = LOG_CHANNELS.filter((c) => !c.critical).map((c) => c.key);
+// GRUP-SAFE olmayanlar: her olay anında tek embed gider, asla kaybolmaz.
+const IMMEDIATE_LOG_KEYS = LOG_CHANNELS.filter((c) => c.critical).map((c) => c.key);
+
+/**
+ * Bir log tipinin adı geçerli mi? (env/config anahtarı üretimi için güvenlik)
+ * @param {string} key
+ */
+function isValidLogKey(key) {
+  return LOG_CHANNEL_MAP.has(String(key || '').trim());
+}
+
+// Kanal adı Discord kurallarına uygun mu? (küçük harf, ASCII, tire, 1-100)
+function isValidChannelName(name) {
+  return typeof name === 'string' && /^[\p{Ll}\p{N}_-]{1,100}$/u.test(name);
+}
+
 module.exports = {
   GUARD_LEVEL,
   LEVEL_META,
@@ -128,4 +173,14 @@ module.exports = {
   TRACK_TTL_MS,
   WEBHOOK_RECENT_MS,
   REQUIRED_PERMS,
+  // Yeni log mimarisi
+  LOG_CHANNELS,
+  LOG_CHANNEL_MAP,
+  LOG_CATEGORY,
+  GROUPABLE_LOG_KEYS,
+  IMMEDIATE_LOG_KEYS,
+  isValidLogKey,
+  isValidChannelName,
+  // Log kanal env anahtarı: GUARD_LOG_ROLE_CHANNEL_ID gibi
+  logEnvKey: (key) => `GUARD_LOG_${String(key).toUpperCase()}_CHANNEL_ID`,
 };

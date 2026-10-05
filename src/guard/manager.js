@@ -13,8 +13,7 @@ const { levelOf, isAllowed } = require('./permissions');
 const { isBotAction } = require('./tracker');
 const { seenAuditEntry, seenCombo } = require('./dedupe');
 const { punishExecutor, beginPunish, endPunish } = require('./punishment');
-const { sendUnresolvedLog } = require('./logger');
-const { queueIncidentLog, targetKindFor } = require('./incidentLog');
+const { sendGuardLog } = require('./logService');
 const { noteEvent } = require('./health');
 const { recordIncident, markIncidentPunished } = require('./incidents');
 const db = require('../database/database');
@@ -83,10 +82,14 @@ async function handleGuardEvent({ client, guild, action, targetId, targetDesc, d
     }
     if (!dbOk) {
       logger.error('Guard: database erişilemiyor — fail-closed, ceza uygulanmıyor.');
-      await sendUnresolvedLog(guild, {
-        actionLabel: def.label,
-        targetDesc,
-        reason: 'Database erişilemiyor (fail-closed: ceza yok).',
+      await sendGuardLog({
+        guild,
+        title: 'Sistem Hatası — Veritabanı Erişilemiyor',
+        action: `Guard koruması devre dışı kaldı (${def.label})`,
+        detail: 'Veritabanına ulaşılamıyor. Fail-closed: ceza uygulanmadı, koruma atlandı.',
+        status: { ok: false, text: 'Veritabanı erişilemiyor' },
+        color: 0xe74c3c,
+        note: `Hedef: ${targetDesc}`,
       }).catch(() => {});
       return { handled: true, punished: false, reason: 'db-down' };
     }
@@ -116,10 +119,14 @@ async function handleGuardEvent({ client, guild, action, targetId, targetDesc, d
         return { handled: true, punished: false, reason: 'unresolved-throttled' };
       }
       logger.warn(`Guard: executor doğrulanamadı (${def.label} → ${targetId}). Ceza yok.`);
-      await sendUnresolvedLog(guild, {
-        actionLabel: def.label,
-        targetDesc,
-        reason: 'Audit Log’da işlem/hedef/zaman eşleşmesi bulunamadı.',
+      await sendGuardLog({
+        guild,
+        title: 'Yetkisiz İşlem Tespit Edildi (Doğrulanamadı)',
+        action: `${def.label} — ${targetDesc}`,
+        detail: 'Audit Log\'da işlem/hedef/zaman eşleşmesi bulunamadı. Güvenlik gereği ceza uygulanmadı.',
+        status: { ok: true, text: '⚠️ Ceza uygulanmadı (doğrulanamadı)' },
+        color: 0xe67e22,
+        note: `Hedef ID: ${targetId}`,
       }).catch(() => {});
       return { handled: true, punished: false, reason: 'unresolved' };
     }
@@ -221,27 +228,25 @@ async function handleGuardEvent({ client, guild, action, targetId, targetDesc, d
       endPunish(guild.id, execId);
     }
 
-    // 6. Log TEK incident kuyruğuna gider (doğrudan sendBanLog YOK — §2, §15).
-    // punish + rollback yukarıda ZATEN uygulandı; burada sadece incident detayı
-    // birikir, pencere sonunda TEK embed atılır (incidentLog.logSent korumalı).
+    // 6. Log: yeni mimari — guard-log kanalına profesyonel embed (TEK gönderim kapısı).
+    // punish + rollback yukarıda ZATEN uygulandı; burada sadece kayıt.
+    // guard-log `critical` olduğu için ASLA gruplanmaz → her ihlal eksiksiz kaydedilir.
     try {
-      queueIncidentLog(
+      await sendGuardLog({
         guild,
-        execSnap,
-        {
-          action,
-          actionLabel: def.label,
-          guardLabel: CATEGORY_LABEL[def.category] || def.category,
-          targetId: String(targetId),
-          targetKind: targetKindFor(action),
-          targetDesc,
-          punishment,
-          rollback,
-          sensitive: !!sensitive,
-        },
-      );
+        title: 'Yetkisiz İşlem Tespit Edildi',
+        action: `**${def.label}** — ${targetDesc}`,
+        detail:
+          `**Ceza:** ${punishment?.ok ? `🔨 Banlandı (${punishment.detail || '—'})` : `❌ Ban başarısız — ${punishment?.detail || 'bilinmiyor'}`}\n` +
+          `**Geri alma:** ${rollback ? (rollback.ok ? `✅ ${rollback.detail}` : `❌ ${rollback.detail}`) : '— Uygulanamadı'}` +
+          (sensitive ? '\n**Hassas hedef:** Botun kritik rolü hedef alındı.' : ''),
+        status: { ok: punishment?.ok, text: punishment?.ok ? 'Koruma uygulandı' : 'Koruma uygulandı (ban başarısız)' },
+        actor: { id: execId },
+        color: punishment?.ok ? 0xe74c3c : 0xe67e22,
+        note: `Guard: ${CATEGORY_LABEL[def.category] || def.category} • Hedef: ${targetDesc}`,
+      }).catch((e) => logger.error('Guard ceza logu gönderilemedi (koruma ETKİLENMEDİ).', e));
     } catch (err) {
-      logger.error('Guard incident kuyruk hatası (ceza/rollback ETKİLENMEDİ).', err);
+      logger.error('Guard log hatası (ceza/rollback ETKİLENMEDİ).', err);
     }
 
     logger.success(`Guard: ${execSnap.tag} cezalandırıldı (${def.label}) — ban=${punishment.ok} rollback=${rollback?.ok ?? 'yok'}`);

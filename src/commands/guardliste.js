@@ -7,8 +7,7 @@ const config = require('../config');
 const { buildErrorEmbed } = require('../utils/embeds');
 const { listWhitelist } = require('../database/database');
 const { canManageGuard } = require('../guard/permissions');
-const { sendListViewLog } = require('../guard/logger');
-const { LEVEL_META } = require('../guard/constants');
+const { sendGuardLog } = require('../guard/logService');
 const logger = require('../utils/logger');
 
 const LEVEL_STYLE = {
@@ -88,7 +87,13 @@ module.exports = {
         await interaction.reply({ embeds: buildPages(rows), flags: MessageFlags.Ephemeral });
       }
       // Görüntüleme kaydı (ihlâl değil — best effort, komutu etkilemez)
-      await sendListViewLog(interaction.guild, { viewer: interaction.user, count: rows.length }).catch(() => {});
+      await sendGuardLog({
+        guild: interaction.guild,
+        title: 'Whitelist Görüntülendi',
+        action: '/guardliste',
+        detail: `${rows.length} Guard kullanıcısı listelendi.`,
+        actor: { id: interaction.user.id },
+      }).catch(() => {});
       return undefined;
     } catch (err) {
       logger.error('Interaction failed: /guardliste.', err);
