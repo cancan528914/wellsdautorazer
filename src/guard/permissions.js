@@ -1,14 +1,16 @@
 /**
  * Guard izin sistemi: seviye bazlı AÇIK izinler (numeric karşılaştırma YOK).
  * Her seviye yalnızca kendi alanından muaftır; URL Guard her şeyden muaftır.
- * Yönetim komutları (/guardekle vb.) SADECE config.GUARD_MANAGER_ROLE_ID rolüne açıktır
- * (src/config.js → GUARD_MANAGER_ROLE_ID). Administrator / ManageGuild / ADMIN_ROLE_ID /
- * eski guard rolleri tek başına erişim VERMEZ; whitelist seviyesi (1-4) komut
- * erişimi VERMEZ (koruma ≠ yönetim). Botun API permissionları etkilenmez.
+ * Yönetim komutları (/guardekle vb.) SADECE şunlara açıktır:
+ *   - config.GUARD_MANAGER_ROLE_ID rolüne sahip olanlar
+ *   - config.GUARD_MANAGER_USER_IDS istisna listesindeki kişiler (rol verilemeyenler için)
+ * Administrator / ManageGuild / ADMIN_ROLE_ID / eski guard rolleri tek başına erişim
+ * VERMEZ; whitelist seviyesi (1-4) komut erişimi VERMEZ (koruma ≠ yönetim).
+ * Botun API permissionları etkilenmez.
  *
- * NOT: Rol değiştirmek için src/config.js'teki GUARD_MANAGER_ROLE_ID sabitini düzenleyin.
- * Bu değer, config.guardManagerRoleIds ve guard/events.js → isSensitiveTarget
- * (botun kritik rol koruması) tarafından da kullanılır.
+ * NOT: Değiştirmek için src/config.js → GUARD_MANAGER_ROLE_ID ve
+ * GUARD_MANAGER_USER_IDS_DEFAULT. Rol değeri config.guardManagerRoleIds ve
+ * guard/events.js → isSensitiveTarget (botun kritik rol koruması) tarafından da kullanılır.
  */
 const config = require('../config');
 const { getGuardLevel } = require('../database/database');
@@ -47,16 +49,43 @@ function isActionAllowed(level, action) {
   }
 }
 
-/** Guard yönetim komutlarını kullanabilir mi? TEK KURAL: guard-yönetici rolü. */
-function canManageGuard(member) {
+/**
+ * Kullanıcı guard yönetimi istisna listesinde mi?
+ * GuildMember.id === user.id; APIInteractionGuildMember'da user.id kullanılır.
+ * @returns {boolean}
+ */
+function isGuardManagerUser(member) {
   if (!member) return false;
+  const ids = config.GUARD_MANAGER_USER_IDS;
+  if (!Array.isArray(ids) || !ids.length) return false;
   try {
-    const cache = member.roles?.cache;
-    if (!cache || typeof cache.has !== 'function') return false;
-    return cache.has(config.GUARD_MANAGER_ROLE_ID);
+    const userId = String(member.user?.id || member.id || '');
+    if (!userId) return false;
+    return ids.some((id) => String(id) === userId);
   } catch {
     return false;
   }
+}
+
+/**
+ * Guard yönetim komutlarını kullanabilir mi?
+ * KURAL: guard-yönetici ROLÜ veya config.GUARD_MANAGER_USER_IDS istisna listesindeki kişi.
+ * Administrator / ManageGuild / ADMIN_ROLE_ID / eski guard rolleri tek başına VERMEZ.
+ * Whitelist seviyesi (1-4) komut erişimi vermez (koruma ≠ yönetim).
+ */
+function canManageGuard(member) {
+  if (!member) return false;
+  // Rol kontrolü (ana kural)
+  try {
+    const cache = member.roles?.cache;
+    if (cache && typeof cache.has === 'function' && cache.has(config.GUARD_MANAGER_ROLE_ID)) {
+      return true;
+    }
+  } catch {
+    /* rol kontrolü hatası aşağıdaki kullanıcı kontrolüne düşer */
+  }
+  // İstisna kullanıcı listesi
+  return isGuardManagerUser(member);
 }
 
 /**
@@ -73,4 +102,4 @@ function guardCoverNote(guildId, userId) {
   }
 }
 
-module.exports = { levelOf, isAllowed, levelActions, isActionAllowed, canManageGuard, guardCoverNote };
+module.exports = { levelOf, isAllowed, levelActions, isActionAllowed, canManageGuard, isGuardManagerUser, guardCoverNote };

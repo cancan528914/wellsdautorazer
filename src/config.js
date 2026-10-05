@@ -44,6 +44,12 @@ const STAFF_TICKET_ROLE_ID = '1522773972393922730';
 // Rol koruması (guard/events.js → isSensitiveTarget) aynı listeyi kullanır.
 const GUARD_MANAGER_ROLE_ID = '1549823609000820766';
 
+// Guard komutlarını kullanabilecek KULLANICI ID'leri (rol verilemeyen durumlar için).
+// DİKKAT: Bu bir istisnadır — normalde rol atanması önerilir.
+// .env (GUARD_MANAGER_USER_IDS) virgüllü liste ile ezebilir (virgüllü liste verilirse
+// bu sabit tamamen değiştirilir). Administrator/ManageGuild bypass YOKTUR.
+const GUARD_MANAGER_USER_IDS_DEFAULT = ['1056585742731726918'];
+
 // Başvuru kabulünde verilen roller — .env (TICKET_ACCEPT_ROLE_IDS) ile değiştirilebilir.
 const ACCEPT_ROLE_IDS = ['1522773983588646982', '1522773986721660928'];
 
@@ -51,6 +57,11 @@ const config = {
   botName: 'Javrex Bot System',
   STAFF_TICKET_ROLE_ID,
   GUARD_MANAGER_ROLE_ID,
+  // Rol verilemeyen kişiler için istisna listesi (env virgüllü listesi verirse onu kullanır).
+  GUARD_MANAGER_USER_IDS: (() => {
+    const env = idList('GUARD_MANAGER_USER_IDS');
+    return env.length ? env : [...GUARD_MANAGER_USER_IDS_DEFAULT];
+  })(),
   ACCEPT_ROLE_IDS,
 
   // --- Hassas bilgiler (.env) ---
