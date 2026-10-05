@@ -6,7 +6,7 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const config = require('./src/config');
 const logger = require('./src/utils/logger');
-const { initDatabase } = require('./src/database/database');
+const { initDatabase, closeDatabase } = require('./src/database/database');
 const { loadCommands } = require('./src/handlers/commandHandler');
 const { buildRestOptions, isNetworkError } = require('./src/utils/restTransport');
 const { createSessionWatch } = require('./src/utils/sessionWatch');
@@ -77,9 +77,14 @@ async function main() {
   initDatabase();
 
   // Web transcript server (bot ile aynı process)
+  let webServer = null;
   try {
     const { startWebServer } = require('./src/web/server');
-    startWebServer().catch((e) => logger.warn(`Web server başlatılamadı: ${e.message}`));
+    startWebServer()
+      .then((s) => {
+        webServer = s;
+      })
+      .catch((e) => logger.warn(`Web server başlatılamadı: ${e.message}`));
   } catch (e) {
     logger.warn(`Web server modülü yüklenemedi: ${e.message}`);
   }
@@ -164,6 +169,49 @@ async function main() {
   });
 
   await loginWithRetry(client);
+
+  // --- Graceful shutdown (Railway/PaaS uyumlu) ---
+  // Railway her deploy'da önce SIGTERM gönderir, ~10sn sonra SIGKILL atar.
+  // SIGTERM'de: ses bağlantısını kapat → gateway'i kapat → WAL checkpoint → çık.
+  // Böylece volume'daki DB her zaman tutarlı kalır (checkpoint olmadan WAL'de
+  // kalan veri yazılmadan process ölebilirdi).
+  let shuttingDown = false;
+  const shutdown = async (signal, code = 0) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info(`${signal} alındı — kontrollü kapatılıyor...`);
+    try {
+      // 1) Ses: kayıtlı kanalı bırak (yeniden deploy'da ready.js geri katılacak)
+      for (const [, guild] of client.guilds.cache) {
+        try {
+          const { leaveVoice } = require('./src/handlers/voiceHandler');
+          await leaveVoice(guild.id, { intentional: true, keepSetting: true });
+        } catch {
+          /* ses kapatma kritik değil */
+        }
+      }
+      // 2) Gateway'i düzgün kapat
+      try {
+        client.destroy();
+      } catch {
+        /* ignore */
+      }
+      // 3) Web server'ı durdur (yeni bağlantı kabul etmesin)
+      if (webServer) {
+        await new Promise((resolve) => webServer.close(resolve));
+      }
+      // 4) DB: WAL checkpoint + kapat
+      closeDatabase();
+      logger.success('Kapatma tamamlandı.');
+    } catch (err) {
+      logger.error('Kapatma sırasında hata.', err);
+    }
+    // Railway'in SIGTERM penceresi (~10sn) dolmadan çık.
+    process.exit(code);
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 main().catch((err) => {

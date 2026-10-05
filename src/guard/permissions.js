@@ -1,10 +1,14 @@
 /**
  * Guard izin sistemi: seviye bazlı AÇIK izinler (numeric karşılaştırma YOK).
  * Her seviye yalnızca kendi alanından muaftır; URL Guard her şeyden muaftır.
- * Yönetim komutları (/guardekle vb.) SADECE 1533434495750111403 rolune açıktır
- * (config.GUARD_MANAGER_ROLE_ID). Administrator / ManageGuild / ADMIN_ROLE_ID /
+ * Yönetim komutları (/guardekle vb.) SADECE config.GUARD_MANAGER_ROLE_ID rolüne açıktır
+ * (src/config.js → GUARD_MANAGER_ROLE_ID). Administrator / ManageGuild / ADMIN_ROLE_ID /
  * eski guard rolleri tek başına erişim VERMEZ; whitelist seviyesi (1-4) komut
  * erişimi VERMEZ (koruma ≠ yönetim). Botun API permissionları etkilenmez.
+ *
+ * NOT: Rol değiştirmek için src/config.js'teki GUARD_MANAGER_ROLE_ID sabitini düzenleyin.
+ * Bu değer, config.guardManagerRoleIds ve guard/events.js → isSensitiveTarget
+ * (botun kritik rol koruması) tarafından da kullanılır.
  */
 const config = require('../config');
 const { getGuardLevel } = require('../database/database');

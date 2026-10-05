@@ -5,6 +5,7 @@
  */
 
 require('dotenv').config();
+const path = require('path');
 
 function required(name) {
   const v = (process.env[name] || '').trim();
@@ -38,8 +39,10 @@ function idList(name) {
 // Sabit staff ticket rolü — tüm ticket kanallarında FULL erişim (View/Read/Send/ManageMessages)
 const STAFF_TICKET_ROLE_ID = '1522773972393922730';
 
-// Guard komutlarını kullanabilen rol — .env (GUARD_MANAGER_ROLE_IDS) ile değiştirilebilir.
-const GUARD_MANAGER_ROLE_ID = '1533434495750111403';
+// Guard komutlarını kullanabilen rol — TEK ROLE kilitlidir.
+// .env'deki GUARD_MANAGER_ROLE_IDS BİLEREK GÖZ ARDI EDİLİR (eski roller geçersizdir).
+// Rol koruması (guard/events.js → isSensitiveTarget) aynı listeyi kullanır.
+const GUARD_MANAGER_ROLE_ID = '1549823609000820766';
 
 // Başvuru kabulünde verilen roller — .env (TICKET_ACCEPT_ROLE_IDS) ile değiştirilebilir.
 const ACCEPT_ROLE_IDS = ['1522773983588646982', '1522773986721660928'];
@@ -216,7 +219,27 @@ const config = {
   modLogChannelId: (process.env.MOD_LOG_CHANNEL_ID || '').trim() || null,
 
   // --- Veritabanı ---
-  dbPath: process.env.DB_PATH || './data/Javrex Bot System.db',
+  // Çözümleme sırası:
+  //   1) DB_PATH (elle, en güçlü)
+  //   2) Railway volume mount yolu (RAILWAY_VOLUME_MOUNT_PATH veya /data) — kalıcı disk
+  //   3) Lokal varsayılan
+  // PaaS (Railway) dosya sistemi GEÇİCİDİR: volume mount edilmezse her
+  // deploy'da DB sıfırlanır (ticket/guard/whitelist kayıtları gider).
+  dbPath: (() => {
+    const explicit = (process.env.DB_PATH || '').trim();
+    if (explicit) return explicit;
+
+    // Railway volume: RAILWAY_VOLUME_MOUNT_PATH her mount'ta otomatik gelir.
+    const mount = (process.env.RAILWAY_VOLUME_MOUNT_PATH || '').trim();
+    if (mount) return path.join(mount, 'wellsd.db');
+
+    // RAILWAY_ENVIRONMENT varsa ama mount yoksa uyarı ver (veri kaybı riski).
+    if ((process.env.RAILWAY_ENVIRONMENT || '').trim()) {
+      console.warn('[WARN] Railway tespit edildi ama DB_PATH tanımlı değil ve volume mount yolu yok.');
+      console.warn('[WARN] Veriler her deploy\'da silinecek. Railway → Volume ekleyip mount path = /data yapın.');
+    }
+    return './data/wellsd.db';
+  })(),
 
   // --- Web Transcript Server ---
   web: {

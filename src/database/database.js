@@ -83,6 +83,36 @@ function dbHealthy() {
   }
 }
 
+/**
+ * Veritabanını kontrollü kapatır (graceful shutdown için).
+ * ÖNCE WAL checkpoint (wal dosyası ana DB'ye yazılır), SONRA close.
+ * Railway/PaaS'da process SIGTERM alınca bu çağrılır; checkpoint olmadan
+ * ölen process'te WAL'de kalan veri volume'a yazılmadan kalabilir.
+ * Asla throw etmez, tekrar çağrılabilir (idempotent).
+ * @returns {{ closed: boolean, checkpointed: boolean }}
+ */
+function closeDatabase() {
+  const result = { closed: false, checkpointed: false };
+  if (!db) return result;
+  try {
+    // WAL → ana dosyaya yaz. TRUNCATE: wal dosyasını da sıfırlar (temiz kapanış).
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+    result.checkpointed = true;
+  } catch (err) {
+    // Checkpoint başarısız olsa bile close denenir (veri WAL'de duruyor, kayıp yok).
+    logger.warn(`[DB] WAL checkpoint başarısız: ${err.code || err.message}`);
+  }
+  try {
+    db.close();
+    result.closed = true;
+    db = null;
+    logger.db('Veritabanı kapatıldı (WAL checkpoint tamam).');
+  } catch (err) {
+    logger.error('[DB] Kapatma hatası.', err);
+  }
+  return result;
+}
+
 // ---------- System kayıtları ----------
 
 function upsertSystem({ messageId, channelId, guildId, type, createdBy }) {
@@ -264,6 +294,7 @@ module.exports = {
   saveGuardSettings,
   countGuardGuilds,
   dbHealthy,
+  closeDatabase,
   // --- Transcript sistemi ---
   createTranscript,
   getTranscriptById,
