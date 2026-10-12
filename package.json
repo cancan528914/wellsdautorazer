@@ -10,7 +10,7 @@
     "deploy": "node deploy-commands.js",
     "doctor": "node doctor.js",
     "doctor:voice": "node doctor-voice.js",
-    "test": "node --test test/unit.test.js test/http.test.js test/bridge-api.test.js",
+    "test": "node --test test/unit.test.js test/http.test.js test/bridge-api.test.js test/tracker.test.js",
     "test:live": "node --test test/live.test.js",
     "test:all": "node --test test/*.test.js"
   },

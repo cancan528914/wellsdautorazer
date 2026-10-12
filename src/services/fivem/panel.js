@@ -13,6 +13,7 @@ const path = require('path');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const service = require('./service');
+const tracker = require('./tracker');
 const { buildPanelEmbed } = require('../../utils/fivemEmbeds');
 
 const STATE_FILE = path.join(process.cwd(), 'data', 'fivem-panel.json');
@@ -100,6 +101,44 @@ async function tick() {
  * Paneli başlat. Kanal yapılandırılmamışsa no-op döner.
  * @param {import('discord.js').Client} client
  */
+
+/**
+ * Katılma/ayrılma bildirimlerini yapılandırılmış kanala yazar.
+ * Bunlar SAYIM olaylarıdır — kimin katıldığı bilinmez ve iddia edilmez.
+ * Kanal tanımlı değilse hiçbir şey yapılmaz.
+ */
+let activityReady = false;
+function setupActivityLog() {
+  const channelId = config.fivem.activityLogChannelId;
+  if (activityReady || !channelId || !/^\d{17,20}$/.test(channelId)) return false;
+  activityReady = true;
+  tracker.subscribe((ev) => {
+    const minDelta = config.fivem.activityMinDelta || 1;
+    if (ev.type === 'offline') {
+      logger.warn('FiveM sunucusu erişilemiyor — oyuncu çıkışı olarak SAYILMADI.');
+      return;
+    }
+    if (Math.abs(ev.delta) < minDelta) return;
+    (async () => {
+      try {
+        const channel = await clientRef?.channels.fetch(channelId);
+        if (!channel || !channel.isTextBased()) return;
+        const up = ev.delta > 0;
+        const n = Math.abs(ev.delta);
+        await channel.send(
+          (up
+            ? '🟢 **+' + n + '** oyuncu katıldı → Toplam **' + ev.to + '**'
+            : '🔴 **−' + n + '** oyuncu ayrıldı → Toplam **' + ev.to + '**'),
+        );
+      } catch (err) {
+        logger.warn('Aktivite logu gönderilemedi: ' + err.message);
+      }
+    })();
+  });
+  logger.success('FiveM hareketlilik logu etkin: kanal ' + channelId);
+  return true;
+}
+
 function start(client) {
   const cfg = config.fivem.panel;
   if (!cfg.enabled) {
@@ -140,4 +179,4 @@ function getState() {
   return { ...state, running: timer !== null };
 }
 
-module.exports = { start, stop, tick, getState, STATE_FILE };
+module.exports = { start, stop, tick, getState, setupActivityLog, STATE_FILE };

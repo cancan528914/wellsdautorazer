@@ -8,5 +8,6 @@ const service = require('./service');
 const pagination = require('./pagination');
 const rcon = require('./rcon');
 const rconParser = require('./rconParser');
+const tracker = require('./tracker');
 
-module.exports = { client, parser, service, pagination, rcon, rconParser };
+module.exports = { client, parser, service, pagination, rcon, rconParser, tracker };

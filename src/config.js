@@ -376,6 +376,23 @@ const config = {
       messageId: firstEnv('FIVEM_PANEL_MESSAGE_ID', 'CFX_PANEL_MESSAGE_ID') || null,
     },
 
+    // --- Hareketlilik takibi (oyuncu SAYISI tabanli) ---
+    tracker: {
+      // Kac ornek saklanir. 30 sn aralikla 180 ornek = 90 dakika gecmis.
+      historySize: (() => {
+        const n = intAny(['FIVEM_TRACKER_HISTORY'], 180);
+        return Math.min(2000, Math.max(10, n));
+      })(),
+    },
+    // Katilma/ayrilma bildirimlerinin gonderilecegi kanal (bos = kapali).
+    // Bunlar bir SAYIM olayidir; kimin katildigi bilinmez ve iddia edilmez.
+    activityLogChannelId: firstEnv('FIVEM_ACTIVITY_LOG_CHANNEL_ID') || null,
+    // Minimum oyuncu farki bildirim icin (0 = her degisim).
+    activityMinDelta: (() => {
+      const n = intAny(['FIVEM_ACTIVITY_MIN_DELTA'], 1);
+      return Math.min(200, Math.max(0, n));
+    })(),
+
     // --- YÖNTEM C: Sunucu resource bridge (push) ---
     // Sunucudaki Lua resource oyuncu listesini buraya POST eder. Secret YALNIZCA
     // sunucu tarafında tutulur; loglara/Discord'a yazılmaz.
