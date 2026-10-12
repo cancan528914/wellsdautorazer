@@ -62,6 +62,12 @@ async function handleButton(interaction) {
     return handleQuitButton(interaction);
   }
 
+  // FiveM liste sayfalama butonları (fivem_p_*): /oyuncular, /aktifoyuncular, /idbul, /tag
+  if (typeof customId === 'string' && customId.startsWith('fivem_p_')) {
+    const { handleFivemButton } = require('./fivemHandler');
+    return handleFivemButton(interaction);
+  }
+
   if (!['ingame_join', 'ingame_leave', 'aktiflik_join'].includes(customId)) return false;
 
   try {

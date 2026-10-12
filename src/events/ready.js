@@ -57,6 +57,15 @@ module.exports = {
       logger.error('Ticket permission senkronunda hata.', err);
     }
 
+    // ---- FiveM canlı paneli (Yöntem A/B/C durumunu tek mesajda gösterir) ----
+    // Kanal tanımlı değilse no-op çalışır; botu etkilemez.
+    try {
+      const fivemPanel = require('../services/fivem/panel');
+      fivemPanel.start(client);
+    } catch (err) {
+      logger.error('FiveM paneli başlatılamadı.', err);
+    }
+
     // Kategori seviye staff izni (spec 6) — sadece bir kez, kanal overwrite zaten yeterli ama kategori de düzelsin
     try {
       const catId = config.ticket.categoryId;

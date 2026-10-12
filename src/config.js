@@ -21,6 +21,29 @@ function int(name, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/**
+ * Birden fazla isimden ilk DOLU değeri okur (yeni env adı + eski ad).
+ * Böylece proje yeni CFX_* adlarıyla da, eski FIVEM_* adlarıyla da çalışır.
+ */
+function firstEnv(...names) {
+  for (const n of names) {
+    const v = (process.env[n] || '').trim();
+    if (v) return v;
+  }
+  return '';
+}
+
+/** Birden fazla isimden ilk geçerli tam sayıyı döner. */
+function intAny(names, fallback) {
+  for (const n of names) {
+    const raw = process.env[n];
+    if (raw === undefined || raw === null || String(raw).trim() === '') continue;
+    const v = parseInt(String(raw).trim(), 10);
+    if (Number.isFinite(v)) return v;
+  }
+  return fallback;
+}
+
 /** Virgülle ayrılmış Discord rol ID listesi (geçersiz girdiler atlanır, tekrarlar silinir). */
 function idList(name) {
   const out = [];
@@ -65,7 +88,11 @@ const config = {
   ACCEPT_ROLE_IDS,
 
   // --- Hassas bilgiler (.env) ---
-  token: required('DISCORD_TOKEN'),
+  token: (() => {
+    const v = firstEnv('DISCORD_BOT_TOKEN', 'DISCORD_TOKEN');
+    if (!v) console.warn('[WARN] .env içinde DISCORD_BOT_TOKEN (veya eski adı DISCORD_TOKEN) tanımlı değil.');
+    return v;
+  })(),
   clientId: required('CLIENT_ID'),
   guildId: required('GUILD_ID'),
 
@@ -251,6 +278,134 @@ const config = {
     }
     return './data/wellsd.db';
   })(),
+
+  // --- FiveM canlı oyuncu sorgu ---
+  // Oyuncu verisi sunucu sahibinin izin verdiği kanaldan okunur. Öncelik sırası
+  // service.js içinde tanımlıdır: local bridge → HTTP (X-Players-Token) → RCON → anonim.
+  // CFX ID sadece metadata'dır (footer/link); oyuncu verisi için kullanılmaz, HTML scraping yoktur.
+  fivem: {
+    cfxId: (process.env.FIVEM_CFX_ID || '8emv3b3').trim() || '8emv3b3',
+    // Ana oyun sunucusu host/port. Kodun hiçbir yerinde IP:port hard-code YOKTUR —
+    // tek kaynak burasıdır.
+    host: firstEnv('CFX_HOST', 'FIVEM_SERVER_HOST') || '5.231.120.202',
+    port: (() => {
+      const n = intAny(['CFX_PORT', 'FIVEM_SERVER_PORT'], 30120);
+      return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : 30120;
+    })(),
+    // Tam adres override (en yüksek öncelik). Örn: FIVEM_SERVER_ENDPOINT=http://85.104.10.20:30120
+    endpoint: (process.env.FIVEM_SERVER_ENDPOINT || '').trim() || null,
+    // Connect endpoint primary'den farklıysa fallback adayı (örn. proxy arkası kurulumlar).
+    // Boşsa kullanılmaz; rastgele fallback YOKTUR.
+    connectEndpoint: (process.env.FIVEM_CONNECT_ENDPOINT || '').trim() || null,
+    // sv_playersToken kullanılıyorsa istekler X-Players-Token header ile imzalanır.
+    // Token ASLA loga/URL'e/embed'e yazılmaz.
+    playersToken: firstEnv('CFX_PLAYERS_TOKEN', 'FIVEM_PLAYERS_TOKEN') || null,
+    // Tek HTTP isteği zaman aşımı (ms, 2000-30000). Önerilen: 5000-8000.
+    apiTimeoutMs: (() => {
+      const n = int('FIVEM_API_TIMEOUT_MS', 7000);
+      return Math.min(30000, Math.max(2000, n));
+    })(),
+    // Genel kaynak önbellek ömrü (ms). Komutlar "canlı"dır; uzun tutmayın.
+    cacheTtlMs: (() => {
+      const n = int('FIVEM_CACHE_TTL_MS', 4000);
+      return Math.min(30000, Math.max(1000, n));
+    })(),
+    // Oyuncu listesi önbellek ömrü (ms) — daha kısa tutulur.
+    playersCacheTtlMs: (() => {
+      const n = int('FIVEM_PLAYERS_CACHE_TTL_MS', 3000);
+      return Math.min(30000, Math.max(1000, n));
+    })(),
+    // --- Local bridge (fivem-local-bridge paketi, AYNI makinede) ---
+    // URL doluysa en yüksek öncelikli kaynaktır. Boşsa kapalıdır.
+    localBridge: {
+      url: (process.env.FIVEM_LOCAL_BRIDGE_URL || '').trim() || null,
+      key: (process.env.FIVEM_LOCAL_BRIDGE_KEY || '').trim() || null,
+      timeoutMs: (() => {
+        const n = int('FIVEM_LOCAL_BRIDGE_TIMEOUT_MS', 3000);
+        return Math.min(15000, Math.max(1000, n));
+      })(),
+    },
+    // --- FiveM RCON (UDP) ---
+    // Parola ASLA koda yazılmaz; sadece FIVEM_RCON_PASSWORD env'den okunur.
+    // Host/port boş bırakılırsa ana oyun sunucusuna (FIVEM_SERVER_HOST/PORT) düşer.
+    rcon: {
+      host: firstEnv('FIVEM_RCON_HOST', 'CFX_HOST', 'FIVEM_SERVER_HOST') || '5.231.120.202',
+      port: (() => {
+        const n = intAny(['FIVEM_RCON_PORT', 'CFX_PORT', 'FIVEM_SERVER_PORT'], 0) || 30120;
+        return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : 30120;
+      })(),
+      // Boşsa RCON kapalı sayılır (FiveM: rcon_password yoksa RCon devre dışı).
+      password: (process.env.FIVEM_RCON_PASSWORD || '').trim() || null,
+      // Tek istek zaman aşımı (ms, 2000-15000). UDP'dir; kayıp pakette retry olur.
+      timeoutMs: (() => {
+        const n = int('FIVEM_RCON_TIMEOUT_MS', 5000);
+        return Math.min(15000, Math.max(2000, n));
+      })(),
+      // status yanıtı önbelleği (ms, 1000-10000). Kısa tutulur (canlı veri).
+      cacheTtlMs: (() => {
+        const n = int('FIVEM_RCON_CACHE_TTL_MS', 2500);
+        return Math.min(10000, Math.max(1000, n));
+      })(),
+    },
+    // Ardışık oyun-sunucusu istekleri arası bekleme (ms). Burst korumalı
+    // sunucularda art arda istekler IP bloklatabildiği için konur (0 kapatır).
+    requestGapMs: (() => {
+      const n = int('FIVEM_REQUEST_GAP_MS', 500);
+      return Math.min(5000, Math.max(0, n));
+    })(),
+    // Başarısız sorgu negatif önbelleği (ms). OFFLINE/ERROR sonucu bu süre boyunca
+    // SUNUCUYA TEKRAR SORULMADAN aynı mesajla döner — komut spam'i blok süresini
+    // uzatamaz. Kullanıcıya gösterilen mesaj değişmez (dürüst hata).
+    negCacheMs: (() => {
+      const n = int('FIVEM_NEG_CACHE_MS', 15000);
+      return Math.min(60000, Math.max(5000, n));
+    })(),
+    // --- Arka plan yoklama aralığı (ms) ---
+    // Kaç ms'de bir sunucu durumu/oyuncu verisi yenilenecek. Panel varsa panel
+    // bu aralıkla güncellenir (yeni mesaj atılmaz). Varsayılan 30 sn.
+    pollIntervalMs: (() => {
+      const n = intAny(['CFX_POLL_INTERVAL_MS', 'CFX_POLL_INTERVAL', 'FIVEM_POLL_INTERVAL_MS'], 30000);
+      return Math.min(600000, Math.max(5000, n));
+    })(),
+    // Otomatik panel güncelleme: spam YAPMAZ, mevcut mesajı düzenler.
+    panel: {
+      enabled: (firstEnv('FIVEM_PANEL_ENABLED') || 'true').toLowerCase() !== 'false',
+      // Panel mesajının tutulduğu kanal. Boşsa otomatik güncelleme yapılmaz.
+      channelId: firstEnv('FIVEM_PANEL_CHANNEL_ID', 'CFX_PANEL_CHANNEL_ID') || null,
+      // Mevcut panel mesajının ID'si (bot yeniden başlasa da aynı mesaj güncellenir).
+      messageId: firstEnv('FIVEM_PANEL_MESSAGE_ID', 'CFX_PANEL_MESSAGE_ID') || null,
+    },
+
+    // --- YÖNTEM C: Sunucu resource bridge (push) ---
+    // Sunucudaki Lua resource oyuncu listesini buraya POST eder. Secret YALNIZCA
+    // sunucu tarafında tutulur; loglara/Discord'a yazılmaz.
+    bridge: {
+      secret: firstEnv('FIVEM_BRIDGE_SECRET', 'CFX_BRIDGE_SECRET') || null,
+      // Bu süreden eski snapshot "bayat" sayılır ve güncelmiş gibi gösterilmez.
+      maxAgeMs: (() => {
+        const n = intAny(['FIVEM_BRIDGE_MAX_AGE_MS'], 120000);
+        return Math.min(3600000, Math.max(15000, n));
+      })(),
+      // Güvenlik sınırları
+      maxPlayers: (() => {
+        const n = intAny(['FIVEM_BRIDGE_MAX_PLAYERS'], 1024);
+        return Math.min(4096, Math.max(1, n));
+      })(),
+      // İstek gövdesi üst sınırı (bayt) — 1024 oyuncu için yeterli.
+      bodyLimit: (() => {
+        const n = intAny(['FIVEM_BRIDGE_BODY_LIMIT'], 512 * 1024);
+        return Math.min(4 * 1024 * 1024, Math.max(4096, n));
+      })(),
+      // Dakika başına kabul edilecek istek sayısı (aşılırsa 429).
+      rateMax: (() => {
+        const n = intAny(['FIVEM_BRIDGE_RATE_MAX'], 30);
+        return Math.min(600, Math.max(1, n));
+      })(),
+    },
+
+    pageSize: 10, // pagination: sayfa başına oyuncu
+    sessionTtlMs: 10 * 60 * 1000, // pagination buton oturumu ömrü
+  },
 
   // --- Web Transcript Server ---
   web: {

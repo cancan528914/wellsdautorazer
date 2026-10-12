@@ -15,6 +15,10 @@ const C = {
   gray: '\x1b[90m',
 };
 
+const DEBUG_ON = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.LOG_DEBUG || '').trim().toLowerCase(),
+);
+
 const logger = {
   info(msg) {
     console.log(`${C.gray}[${timestamp()}]${C.reset} ${C.blue}[INFO]${C.reset} ${msg}`);
@@ -31,6 +35,12 @@ const logger = {
   },
   warn(msg) {
     console.warn(`${C.gray}[${timestamp()}]${C.reset} ${C.yellow}[WARN]${C.reset} ${msg}`);
+  },
+  // Debug seviyesi: varsayilan KAPALI. .env icine LOG_DEBUG=true yazarak acilir.
+  debug(msg, err) {
+    if (!DEBUG_ON) return;
+    console.log(`${C.gray}[${timestamp()}]${C.reset} ${C.gray}[DEBUG]${C.reset} ${msg}`);
+    if (err) console.error(err);
   },
   error(msg, err) {
     console.error(`${C.gray}[${timestamp()}]${C.reset} ${C.red}[ERROR]${C.reset} ${msg}`);

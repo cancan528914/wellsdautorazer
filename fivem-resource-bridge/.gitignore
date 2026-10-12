@@ -1,0 +1,6 @@
+# Gerçek secret dosyası ASLA commit edilmez
+config.lua
+
+# Yerel test çıktıları
+*.log
+.lua_cache/

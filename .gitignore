@@ -6,3 +6,5 @@ data/*.db
 data/*.db-*
 *.log
 .DS_Store
+fivem-local-bridge/data/
+fivem-local-bridge/node_modules/

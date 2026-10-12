@@ -9,6 +9,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const config = require('../config');
 const logger = require('../utils/logger');
+const fivemBridge = require('../services/fivem/bridge');
 const {
   getTranscriptById,
   getTranscriptMessages,
@@ -39,6 +40,113 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
+
+// --- FIVEM BRIDGE (Yontem C) rotlari ---
+// Bu blok bilerek GLOBAL body parserlardan ONCE gelir: kendi ham govdesi
+// (express.raw) ve kendi limitleriyle calisir. Boylece 413/400 dogru doner.
+// ===================== FIVEM RESOURCE BRIDGE (Yöntem C) =====================
+
+// Bu route kendi JSON parser'ını ve rate limiter'ını kullanır; global 1mb
+// express.json middleware'i route'tan ÖNCE çalıştığı için ham gövde isteriz.
+const bridgeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: config.fivem.bridge.rateMax || 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'rate_limited' },
+});
+
+// Yanıt süresi sınırı: kaynak takılırsa yavaş isteklere yer bırakma.
+const BRIDGE_RESPONSE_TIMEOUT_MS = 15000;
+
+/**
+ * POST /api/fivem/players
+ * Body: { "players": [{ "serverId": 1, "name": "Ada", "ping": 30 }, ...] }
+ * Secret: header "X-Bridge-Secret"
+ */
+// Yanıt süresi sınırı — ROUTE'TAN ÖNCE kayıtlı olmalı (Express sırası belirleyici).
+app.use('/api/fivem/players', (req, res, next) => {
+  const timer = setTimeout(() => {
+    if (!res.headersSent) res.status(503).json({ error: 'timeout' });
+  }, BRIDGE_RESPONSE_TIMEOUT_MS);
+  if (timer.unref) timer.unref();
+  res.on('finish', () => clearTimeout(timer));
+  res.on('close', () => clearTimeout(timer));
+  next();
+});
+
+app.post(
+  '/api/fivem/players',
+  bridgeLimiter,
+  express.raw({ type: 'application/json', limit: config.fivem.bridge.bodyLimit }),
+  (req, res) => {
+    // 1) Ham gövde limiti aşıldıysa express.raw hata verdi; 413 dön.
+    if (!Buffer.isBuffer(req.body)) {
+      return res.status(415).json({ error: 'expect_json' });
+    }
+    // 2) Boyut sınırı (defansif: raw limit zaten uyguladı ama tekrar kontrol).
+    if (req.body.length > config.fivem.bridge.bodyLimit) {
+      return res.status(413).json({ error: 'payload_too_large' });
+    }
+    // 3) Geçersiz JSON kontrolü — istisna sızdırma, 400 dön.
+    let parsed;
+    try {
+      parsed = JSON.parse(req.body.toString('utf8'));
+    } catch {
+      logger.warn('Bridge isteği: geçersiz JSON gövdesi (reddedildi).');
+      return res.status(400).json({ error: 'invalid_json' });
+    }
+
+    // 4) Yetkilendirme + şema doğrulama + saklama (bridge.js içinde).
+    const provided = req.get('X-Bridge-Secret') || '';
+    let result;
+    try {
+      result = fivemBridge.ingest(parsed, provided);
+    } catch (err) {
+      // Beklenmeyen hata: kullanıcıya 500, içeride detay loglanır (veri değil).
+      logger.error('Bridge ingest beklenmedik hata.', err);
+      return res.status(500).json({ error: 'internal' });
+    }
+
+    // 5) Cevap: yalnız durum + sayaç. Oyuncu verisi/secret ASLA dönülmez.
+    if (!result.ok) {
+      // 503 config yoksa kullanıcıya ne yapacağını söyle (gizli değil).
+      return res.status(result.code).json({ error: result.error, ok: false });
+    }
+    res.set('Cache-Control', 'no-store');
+    return res.status(200).json({ ok: true, accepted: result.count, dropped: result.dropped || 0 });
+  },
+);
+
+// ===================== FIVEM RESOURCE BRIDGE (Yöntem C) =====================
+
+// express.raw gövde limitini aşarsa PayloadTooLargeError fırlatır ve istek GLOBAL
+// hata işleyicisine düşer (500 + HTML). Bu route'a özel işleyici ile 413 JSON dönülür.
+app.use('/api/fivem/players', (err, req, res, next) => {
+  if (!err) return next();
+  const tooLarge =
+    err.type === 'entity.too.large' || err.status === 413 || err.statusCode === 413;
+  if (tooLarge) {
+    logger.warn('Bridge isteği reddedildi: gövde limiti aşıldı (413).');
+    return res.status(413).json({ error: 'payload_too_large' });
+  }
+  logger.warn('Bridge isteği reddedildi: bozuk istek gövdesi.');
+  return res.status(400).json({ error: 'invalid_request' });
+});
+
+// Yöntem C sağlığı (secret değeri ASLA dönülmez; sadece "var/yok" ve sayaç).
+app.get('/api/fivem/status', bridgeLimiter, (req, res) => {
+  const snap = fivemBridge.getSnapshot();
+  res.json({
+    configured: snap.configured,
+    hasData: snap.hasData,
+    count: snap.count,
+    receivedAt: snap.receivedAt,
+    ageMs: snap.ageMs,
+    stale: snap.stale,
+  });
+});
+
 
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
