@@ -62,7 +62,7 @@ async function handleButton(interaction) {
     return handleQuitButton(interaction);
   }
 
-  // FiveM liste sayfalama butonları (fivem_p_*): /oyuncular, /aktifoyuncular, /idbul, /tag
+  // FiveM liste sayfalama butonları (fivem_p_*): /oyuncular
   if (typeof customId === 'string' && customId.startsWith('fivem_p_')) {
     const { handleFivemButton } = require('./fivemHandler');
     return handleFivemButton(interaction);

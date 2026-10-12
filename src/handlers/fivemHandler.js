@@ -1,5 +1,5 @@
 /**
- * FiveM pagination buton handler — /aktifoyuncular ve /tag sayfa çevirme.
+ * FiveM pagination buton handler — /oyuncular sayfa çevirme.
  * customId: fivem_p_first | fivem_p_prev | fivem_p_next | fivem_p_last (statik).
  * Sayfa verisi oturum snapshot'ından gelir; YENİ API isteği yapılmaz.
  */

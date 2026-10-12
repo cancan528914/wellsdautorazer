@@ -32,7 +32,7 @@ function clock(ts) {
 }
 
 /**
- * Erişilemeyen veri bildirimi — /id ve /idbul dürüst cevabı.
+ * Erişilemeyen veri bildirimi — bu botun dürüst cevabı.
  * @param {object|null} q sorgu sonucu (sayı gösterilebilirse)
  * @param {'search'|'id'|'offline'} reason
  */

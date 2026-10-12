@@ -189,7 +189,7 @@ function buildPlayerNotFoundEmbed({ id, hostname, onlineCount, maxClients, laten
 }
 
 /**
- * Sayfalı oyuncu listesi (/aktifoyuncular + /tag ortak).
+ * Sayfalı oyuncu listesi (/oyuncular — yalnızca erişim açıksa kullanılır).
  * kind: 'players' | 'tag'
  */
 function buildPlayerListEmbed({ kind, title, headerLines, players, page, totalPages, total, startIndex, onlineCount, maxClients, latencyMs, serverReported }) {
@@ -208,17 +208,17 @@ function buildPlayerListEmbed({ kind, title, headerLines, players, page, totalPa
   return embed;
 }
 
-/** /aktifoyuncular başlığı (bu embed sadece LIVE iken kurulur) */
+/** /oyuncular başlığı (bu embed sadece LIVE iken kurulur) */
 function playersHeader(hostname) {
   return [serverLine(hostname), '🟢 **Sunucu Online**'];
 }
 
-/** /tag başlığı (toplam sayı HER ZAMAN — spec §15) */
+/** /oyuncular arama başlığı (toplam sayı HER ZAMAN — spec §15) */
 function tagHeader(term, total) {
   return [`🔎 Aranan: \`${term.slice(0, 64)}\``, total > 0 ? `🟢 **${total} aktif oyuncu bulundu**` : ''];
 }
 
-/** /tag boş sonuç (public — spec §16) */
+/** /oyuncular arama boş sonuç (public — spec §16) */
 function buildTagEmptyEmbed({ term }) {
   return baseEmbed(FIVEM_ORANGE)
     .setTitle('🔎 TAG SORGUSU')
@@ -474,7 +474,7 @@ function buildPanelEmbed(q, nowMs) {
   } else if (q.status === 'LIVE' && q.players?.length) {
     embed.addFields({
       name: '📋 Oyuncu Listesi',
-      value: '/oyuncular veya /idbul ile ' + q.players.length + ' oyuncu sorgulanabilir.',
+      value: '/sunucudurum ile ' + q.players.length + ' oyuncu sorgulanabilir.',
       inline: false,
     });
   }
